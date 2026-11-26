@@ -12,6 +12,7 @@ import {
   EquipmentSlotType,
   GameHudSnapshot,
   GraphicsQuality,
+  MonetizationOfferId,
   SkillId,
   UpgradeId,
   WaveHudEvent,
@@ -38,6 +39,7 @@ import {
   SkillCollectionFeedbackInfo,
   SkillCollectionModal,
 } from './SkillCollectionModal';
+import { SkillSwitcherModal } from './SkillSwitcherModal';
 import { TankUpgradePanel, UpgradeFeedbackInfo } from './TankUpgradePanel';
 import { TitleOverlay } from './TitleOverlay';
 import { TopHud } from './TopHud';
@@ -71,8 +73,9 @@ export function GameShell() {
   const [autoForgeSettingsOpen, setAutoForgeSettingsOpen] =
     useState<boolean>(false);
   const [skillModal, setSkillModal] = useState<
-    'pending' | 'auto_upgrade_settings' | null
+    'pending' | 'auto_upgrade_settings' | 'switcher' | null
   >(null);
+  const [switcherSlotIndex, setSwitcherSlotIndex] = useState<number>(0);
   const [focusedPendingSkillId, setFocusedPendingSkillId] =
     useState<SkillId | null>(null);
   const [upgradeFeedback, setUpgradeFeedback] =
@@ -87,6 +90,13 @@ export function GameShell() {
     useState<UpgradeId | null>(null);
   const [highlightedCollectionSkillId, setHighlightedCollectionSkillId] =
     useState<SkillId | null>(null);
+  const [adFeedback, setAdFeedback] = useState<string | null>(null);
+  const [fullscreenSupported] = useState<boolean>(() =>
+    playgamaBridge.isFullscreenSupported()
+  );
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(() =>
+    playgamaBridge.isFullscreenActive()
+  );
 
   const toastTimerRef = useRef<number | null>(null);
   const toastCounterRef = useRef<number>(0);
@@ -102,7 +112,9 @@ export function GameShell() {
   const lastSeenAutoForgeEventIdRef = useRef<number>(0);
   const activePanelRef = useRef<ActivePanelId>(null);
   const autoForgeSettingsOpenRef = useRef<boolean>(false);
-  const skillModalRef = useRef<'pending' | 'auto_upgrade_settings' | null>(null);
+  const skillModalRef = useRef<
+    'pending' | 'auto_upgrade_settings' | 'switcher' | null
+  >(null);
 
   useEffect(() => {
     activePanelRef.current = activePanel;
@@ -262,12 +274,19 @@ export function GameShell() {
   );
 
   const openSkillModal = useCallback(
-    (mode: 'pending' | 'auto_upgrade_settings', focusSkillId: SkillId | null = null) => {
+    (
+      mode: 'pending' | 'auto_upgrade_settings' | 'switcher',
+      focusSkillId: SkillId | null = null,
+      slotIndex?: number
+    ) => {
       if (activePanelRef.current === 'forge') {
         engine.keepForgedItemInInventory();
       }
       setAutoForgeSettingsOpen(false);
       setActivePanel(null);
+      if (mode === 'switcher' && slotIndex !== undefined) {
+        setSwitcherSlotIndex(Math.max(0, Math.min(5, slotIndex)));
+      }
       setFocusedPendingSkillId(focusSkillId);
       setSkillModal(mode);
     },
@@ -292,6 +311,7 @@ export function GameShell() {
     void engine.initialize();
 
     const unsubVis = playgamaBridge.onVisibilityChange((isHidden) => {
+      soundEffects.setVisibilityMuted(isHidden);
       if (isHidden) {
         if (engine.getSnapshot().phase === 'ACTIVE') {
           setPauseModalMode('pause');
@@ -300,6 +320,10 @@ export function GameShell() {
           void engine.persist();
         }
       }
+    });
+
+    const unsubFullscreen = playgamaBridge.onFullscreenChange((active) => {
+      setIsFullscreen(active);
     });
 
     const onPageHide = () => {
@@ -332,6 +356,7 @@ export function GameShell() {
     return () => {
       unsubscribe();
       unsubVis();
+      unsubFullscreen();
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('beforeunload', onPageHide);
       window.removeEventListener('keydown', onKeyDown);
@@ -431,11 +456,73 @@ export function GameShell() {
   };
 
   const handleClaimOfflineRewards = () => {
+    setAdFeedback(null);
     const res = engine.claimOfflineRewards();
     if (res.success) {
       soundEffects.playWaveClear();
       showNotice(`Claimed +${res.coinsAwarded.toLocaleString()} Offline Coins`);
     }
+  };
+
+  const handleWatchOfflineBonusAd = async () => {
+    setAdFeedback(null);
+    const res = await engine.requestRewardedOffer('offline_reward_bonus');
+    if (res.granted) {
+      soundEffects.playWaveClear();
+      const total =
+        (res.baseOfflineCoinsAwarded ?? 0) + res.bonusCoinsAwarded;
+      showNotice(
+        `Claimed +${total.toLocaleString()} Coins (incl. +${res.bonusCoinsAwarded.toLocaleString()} Bonus)!`
+      );
+      return;
+    }
+
+    if (res.reason === 'ad_closed_early') {
+      setAdFeedback('Ad closed before completion — bonus not granted.');
+    } else if (res.reason === 'sdk_not_connected') {
+      setAdFeedback('Rewarded ads are currently unavailable.');
+    } else if (res.reason === 'daily_limit_reached') {
+      setAdFeedback('Daily bonus limit reached.');
+    } else if (res.reason !== 'ad_in_progress') {
+      setAdFeedback('Ad failed to load — you can still claim your Coins.');
+    }
+  };
+
+  const handleRequestRewardedOffer = async (
+    offerId: Exclude<MonetizationOfferId, 'offline_reward_bonus'>
+  ) => {
+    setAdFeedback(null);
+    const res = await engine.requestRewardedOffer(offerId);
+    if (res.granted) {
+      soundEffects.playUpgrade();
+      if (offerId === 'optional_coin_bonus') {
+        setAdFeedback(
+          `Received +${res.bonusCoinsAwarded.toLocaleString()} Supply Drop Coins!`
+        );
+      } else if (res.boostActivated) {
+        setAdFeedback('Tactical Overcharge active for 2m!');
+      }
+      return;
+    }
+
+    soundEffects.playInvalid();
+    if (res.reason === 'ad_closed_early') {
+      setAdFeedback('Ad closed early — reward not granted.');
+    } else if (res.reason === 'sdk_not_connected') {
+      setAdFeedback('Rewarded ads are unavailable outside Playgama.');
+    } else if (res.reason === 'cooldown_active') {
+      setAdFeedback('Offer is currently on cooldown.');
+    } else if (res.reason === 'daily_limit_reached') {
+      setAdFeedback('Daily limit reached for this bonus.');
+    } else if (res.reason !== 'ad_in_progress') {
+      setAdFeedback('Ad could not be completed. Please try again later.');
+    }
+  };
+
+  const handleToggleFullscreen = async () => {
+    soundEffects.playClick(500);
+    const active = await playgamaBridge.toggleFullscreen();
+    setIsFullscreen(active);
   };
 
   const handleTogglePause = () => {
@@ -615,33 +702,58 @@ export function GameShell() {
     const tappedSlot = snapshot.skillSlots[slotIndex];
     if (!tappedSlot) return;
 
-    if (!tappedSlot.skillId) {
-      soundEffects.playClick(420);
-      if (snapshot.pendingSkillCount > 0) {
-        openSkillModal('pending', snapshot.pendingSkills[0]?.skillId ?? null);
-      } else {
-        showNotice(`Slot ${slotIndex + 1} is vacant · Tap Summon to fill`);
+    if (skillModal === 'switcher' && switcherSlotIndex === slotIndex) {
+      soundEffects.playClick(400);
+      setSkillModal(null);
+      return;
+    }
+
+    soundEffects.playClick(tappedSlot.skillId ? 520 : 440);
+    openSkillModal('switcher', null, slotIndex);
+  };
+
+  const handleSwitchSkillSlot = (slotIndex: number, skillId: SkillId) => {
+    const res = engine.switchSkillSlot(slotIndex, skillId);
+    if (!res.success) {
+      soundEffects.playInvalid();
+      if (res.reason === 'already_equipped_elsewhere') {
+        showNotice('That skill is already equipped in another slot', 'error');
+      } else if (res.reason === 'not_unlocked') {
+        showNotice('Unlock this skill before equipping it', 'error');
       }
       return;
     }
 
-    const def = skillRegistry.getDefinition(tappedSlot.skillId);
-    const skillName = def?.name ?? tappedSlot.skillId;
-    const pendingForSlot = snapshot.pendingSkills.find(
-      (p) => p.skillId === tappedSlot.skillId
-    );
+    const newDef = skillRegistry.getDefinition(skillId);
+    const prevDef = res.replacedSkillId
+      ? skillRegistry.getDefinition(res.replacedSkillId)
+      : undefined;
+    const skillName = newDef?.name ?? skillId;
+    const finalLevel = res.level ?? 1;
 
-    soundEffects.playClick(520);
-    if (pendingForSlot && pendingForSlot.copies > 0) {
-      openSkillModal('pending', tappedSlot.skillId);
-      return;
+    if (res.autoUpgrades && res.autoUpgrades.length > 0) {
+      soundEffects.playSkillUpgrade(finalLevel);
+      triggerUpgradeHighlight(slotIndex);
+      showBanner({
+        kind: 'upgrade',
+        skillId,
+        name: skillName,
+        rarity: newDef?.rarity,
+        previousLevel: res.autoUpgrades[0].previousLevel,
+        level: finalLevel,
+        accentColor: newDef?.accentColor ?? '#34D399',
+      });
+    } else {
+      soundEffects.playEquip();
+      triggerHighlight(slotIndex);
+      showNotice(
+        prevDef
+          ? `Slot ${slotIndex + 1}: Replaced ${prevDef.shortLabel} with ${skillName} Lv.${finalLevel}`
+          : `Equipped ${skillName} Lv.${finalLevel} into Slot ${slotIndex + 1}`
+      );
     }
 
-    showNotice(
-      tappedSlot.level >= MAX_SKILL_LEVEL
-        ? `${skillName} · Max Lv.${MAX_SKILL_LEVEL}`
-        : `${skillName} · Lv.${tappedSlot.level} / ${MAX_SKILL_LEVEL} (duplicates upgrade automatically)`
-    );
+    setSkillModal(null);
   };
 
   const handleEquipPendingToSlot = (slotIndex: number, skillId: SkillId) => {
@@ -1317,6 +1429,26 @@ export function GameShell() {
           />
         )}
 
+        {snapshot.phase === 'ACTIVE' && skillModal === 'switcher' && (
+          <SkillSwitcherModal
+            initialSlotIndex={switcherSlotIndex}
+            skillSlots={snapshot.skillSlots}
+            skillCollection={snapshot.skillCollection}
+            skillBattleLevels={snapshot.skillBattleLevels}
+            pendingSkills={snapshot.pendingSkills}
+            onSwitchSkill={handleSwitchSkillSlot}
+            onApplyPendingUpgrade={handleApplyPendingUpgrade}
+            onOpenPendingSkills={(focusId) => {
+              soundEffects.playClick(520);
+              openSkillModal('pending', focusId);
+            }}
+            onClose={() => {
+              soundEffects.playClick(400);
+              setSkillModal(null);
+            }}
+          />
+        )}
+
         {snapshot.phase === 'ACTIVE' &&
           skillModal === 'auto_upgrade_settings' && (
             <AutoUpgradeSettingsModal
@@ -1336,6 +1468,7 @@ export function GameShell() {
         {snapshot.phase === 'TITLE' && (
           <TitleOverlay
             highestWave={snapshot.wave.highestWave}
+            isInitializing={snapshot.isInitializing}
             onStart={handleStartGame}
           />
         )}
@@ -1344,7 +1477,10 @@ export function GameShell() {
           <OfflineRewardModal
             reward={snapshot.offlineReward}
             offlineBonusPreview={snapshot.monetization.offlineBonusPreview}
+            isAdBusy={snapshot.monetization.isAdPlaying}
+            adFeedback={adFeedback}
             onClaim={handleClaimOfflineRewards}
+            onWatchBonusAd={handleWatchOfflineBonusAd}
           />
         )}
 
@@ -1410,18 +1546,30 @@ export function GameShell() {
             autoForgeEnabled={snapshot.forge.autoForge.enabled}
             settings={snapshot.settings}
             monetization={snapshot.monetization}
+            fullscreenSupported={fullscreenSupported}
+            isFullscreen={isFullscreen}
+            adFeedback={adFeedback}
             onChangeMode={(nextMode) => {
               soundEffects.playClick(500);
+              setAdFeedback(null);
               setPauseModalMode(nextMode);
             }}
-            onResume={handleResume}
+            onResume={() => {
+              setAdFeedback(null);
+              handleResume();
+            }}
             onToggleSound={handleToggleSound}
             onChangeSoundVolume={handleChangeSoundVolume}
             onToggleMusic={handleToggleMusic}
             onChangeMusicVolume={handleChangeMusicVolume}
             onChangeGraphicsQuality={handleChangeGraphicsQuality}
             onToggleRangeRing={handleToggleRangeRing}
-            onReturnToTitle={handleReturnToTitle}
+            onToggleFullscreen={handleToggleFullscreen}
+            onRequestRewardedOffer={handleRequestRewardedOffer}
+            onReturnToTitle={() => {
+              setAdFeedback(null);
+              handleReturnToTitle();
+            }}
           />
         )}
 
@@ -1462,6 +1610,7 @@ export function GameShell() {
         autoUpgradeEnabled={snapshot.autoUpgrade.enabled}
         highlightedSlotIndex={highlightedSlotIndex}
         upgradedSlotIndex={upgradedSlotIndex}
+        activeSwitchSlotIndex={skillModal === 'switcher' ? switcherSlotIndex : null}
         onSummonClick={handleSummonClick}
         onSkillSlotClick={handleSkillSlotClick}
         onOpenPendingSkills={() => {

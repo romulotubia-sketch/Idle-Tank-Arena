@@ -50,6 +50,25 @@ const DEPLOYMENT_PAD_SCALE = 1.45;
 const ENEMY_VISUAL_SCALE = 1.24;
 const BOSS_VISUAL_SCALE = 1.52;
 
+const DASH_EMPTY: number[] = [];
+const DASH_BOUNDARY = [10, 7];
+const DASH_RANGE = [7, 7];
+const DASH_MINE = [4, 4];
+const DASH_MORTAR_ARC = [5, 6];
+const DASH_MORTAR_RING = [6, 4];
+const DASH_TELEGRAPH_LINE = [6, 6];
+const DASH_TELEGRAPH_RING = [8, 5];
+const DASH_ACID = [4, 3];
+const DASH_ORBITAL = [7, 5];
+const DASH_VORTEX = [6, 4];
+const DASH_OVERDRIVE = [5, 4];
+const SCOUT_WHEELS: readonly [number, number][] = [
+  [-12.5, -10],
+  [8.5, -10],
+  [-12.5, 4],
+  [8.5, 4],
+];
+
 export class Renderer {
   private ctx: CanvasRenderingContext2D | null = null;
   private camera: Camera;
@@ -156,32 +175,39 @@ export class Renderer {
       ctx,
       tank.movementOrigin.x,
       tank.movementOrigin.y,
-      tank.movementRadius
+      tank.movementRadius,
+      isLowQuality
     );
 
     if (showRangeRing) {
-      this.drawRangeRing(ctx, tank.position.x, tank.position.y, tank.stats.range);
+      this.drawRangeRing(
+        ctx,
+        tank.position.x,
+        tank.position.y,
+        tank.stats.range,
+        isLowQuality
+      );
     }
 
     // Layer 3: Ground mines, Mortar reticles/arcs, Delayed strikes & Boss Siege Telegraphs
     this.drawMines(ctx, mines, isLowQuality);
-    this.drawDelayedStrikes(ctx, delayedStrikes);
-    this.drawMortarReticles(ctx, projectiles);
+    this.drawDelayedStrikes(ctx, delayedStrikes, isLowQuality);
+    this.drawMortarReticles(ctx, projectiles, isLowQuality);
     this.drawBossTelegraphs(ctx, enemies);
 
     // Layer 4: Enemies, Sentry Turrets, Player Tank & Combat Drones
-    this.drawEnemies(ctx, enemies);
-    this.drawTurrets(ctx, turrets);
-    this.drawPlayerTank(ctx, tank);
-    this.drawDrones(ctx, drones);
+    this.drawEnemies(ctx, enemies, isLowQuality);
+    this.drawTurrets(ctx, turrets, isLowQuality);
+    this.drawPlayerTank(ctx, tank, isLowQuality);
+    this.drawDrones(ctx, drones, isLowQuality);
 
     // Layer 5: Projectiles & Combat VFX (explosions, beams, arcs, particles)
-    this.drawProjectiles(ctx, projectiles);
+    this.drawProjectiles(ctx, projectiles, isLowQuality);
     this.drawWorldEffects(ctx, effects, isLowQuality);
 
     // Layer 6: Enemy Health Bars & Floating Damage Numbers (always crisp and readable above VFX)
     this.drawEnemyHealthBars(ctx, enemies);
-    this.drawDamageNumbers(ctx, effects);
+    this.drawDamageNumbers(ctx, effects, isLowQuality);
 
     ctx.restore();
 
@@ -506,19 +532,22 @@ export class Renderer {
     ctx: CanvasRenderingContext2D,
     ox: number,
     oy: number,
-    radius: number
+    radius: number,
+    isLowQuality = false
   ): void {
     ctx.save();
     ctx.translate(ox, oy);
 
-    // Subtle tinted safe movement floor
-    ctx.fillStyle = 'rgba(56, 189, 248, 0.04)';
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, Math.PI * 2);
-    ctx.fill();
+    if (!isLowQuality) {
+      // Subtle tinted safe movement floor
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.04)';
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.setLineDash(DASH_BOUNDARY);
+    }
 
     // Fixed circular boundary ring
-    ctx.setLineDash([10, 7]);
     ctx.strokeStyle = 'rgba(125, 211, 252, 0.36)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -526,7 +555,9 @@ export class Renderer {
     ctx.stroke();
 
     // Four cardinal perimeter markers
-    ctx.setLineDash([]);
+    if (!isLowQuality) {
+      ctx.setLineDash(DASH_EMPTY);
+    }
     ctx.strokeStyle = 'rgba(125, 211, 252, 0.5)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -544,11 +575,14 @@ export class Renderer {
     ctx: CanvasRenderingContext2D,
     cx: number,
     cy: number,
-    radius: number
+    radius: number,
+    isLowQuality = false
   ): void {
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.setLineDash([7, 7]);
+    if (!isLowQuality) {
+      ctx.setLineDash(DASH_RANGE);
+    }
     ctx.strokeStyle = 'rgba(251, 191, 36, 0.3)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -578,20 +612,22 @@ export class Renderer {
       if (isArmed && !isLowQuality) {
         ctx.strokeStyle = `rgba(163, 230, 53, ${0.14 + pulse * 0.16})`;
         ctx.lineWidth = 1.2;
-        ctx.setLineDash([4, 4]);
+        ctx.setLineDash(DASH_MINE);
         ctx.beginPath();
         ctx.arc(0, 0, m.triggerRadius, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.setLineDash(DASH_EMPTY);
       }
 
       ctx.scale(1.2, 1.2);
 
       // Ground shadow
-      ctx.fillStyle = 'rgba(8, 10, 12, 0.38)';
-      ctx.beginPath();
-      ctx.arc(1.5, 2, 10, 0, Math.PI * 2);
-      ctx.fill();
+      if (!isLowQuality) {
+        ctx.fillStyle = 'rgba(8, 10, 12, 0.38)';
+        ctx.beginPath();
+        ctx.arc(1.5, 2, 10, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Octagonal metallic mine casing
       ctx.fillStyle = '#333C36';
@@ -635,7 +671,8 @@ export class Renderer {
 
   private drawMortarReticles(
     ctx: CanvasRenderingContext2D,
-    projectiles: readonly ProjectileInstance[]
+    projectiles: readonly ProjectileInstance[],
+    isLowQuality = false
   ): void {
     for (let i = 0; i < projectiles.length; i++) {
       const p = projectiles[i];
@@ -647,19 +684,19 @@ export class Renderer {
           ? Math.min(1, p.flightElapsed / p.flightDuration)
           : 0.5;
 
-      // Visible parabolic trajectory arc preview
-      if (p.startX !== undefined && p.startY !== undefined) {
+      // Visible parabolic trajectory arc preview (skipped in performance mode)
+      if (!isLowQuality && p.startX !== undefined && p.startY !== undefined) {
         const midX = (p.startX + p.targetX) * 0.5;
         const midY = (p.startY + p.targetY) * 0.5 - 116;
         ctx.save();
         ctx.strokeStyle = `rgba(251, 146, 60, ${0.22 + (1 - t) * 0.16})`;
         ctx.lineWidth = 1.4;
-        ctx.setLineDash([5, 6]);
+        ctx.setLineDash(DASH_MORTAR_ARC);
         ctx.beginPath();
         ctx.moveTo(p.startX, p.startY);
         ctx.quadraticCurveTo(midX, midY, p.targetX, p.targetY);
         ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.setLineDash(DASH_EMPTY);
         ctx.restore();
       }
 
@@ -672,13 +709,17 @@ export class Renderer {
 
       ctx.strokeStyle = `rgba(249, 115, 22, ${0.4 + t * 0.48})`;
       ctx.lineWidth = 1.5;
-      ctx.setLineDash([6, 4]);
+      if (!isLowQuality) {
+        ctx.setLineDash(DASH_MORTAR_RING);
+      }
       ctx.beginPath();
       ctx.arc(0, 0, p.aoeRadius, 0, Math.PI * 2);
       ctx.stroke();
 
       // Contracting inner timing bullseye
-      ctx.setLineDash([]);
+      if (!isLowQuality) {
+        ctx.setLineDash(DASH_EMPTY);
+      }
       ctx.strokeStyle = `rgba(253, 186, 116, ${0.55 + t * 0.4})`;
       ctx.beginPath();
       ctx.arc(0, 0, Math.max(4, p.aoeRadius * (1 - t)), 0, Math.PI * 2);
@@ -714,12 +755,12 @@ export class Renderer {
       ctx.save();
       ctx.strokeStyle = `rgba(244, 63, 94, ${0.3 + progress * 0.45})`;
       ctx.lineWidth = 2;
-      ctx.setLineDash([6, 6]);
+      ctx.setLineDash(DASH_TELEGRAPH_LINE);
       ctx.beginPath();
       ctx.moveTo(e.position.x, e.position.y);
       ctx.lineTo(e.telegraphX, e.telegraphY);
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.setLineDash(DASH_EMPTY);
 
       // Ground hazard zone (exact damage boundary)
       ctx.translate(e.telegraphX, e.telegraphY);
@@ -743,11 +784,11 @@ export class Renderer {
 
       ctx.strokeStyle = `rgba(253, 164, 175, ${0.65 + progress * 0.35})`;
       ctx.lineWidth = 2.4;
-      ctx.setLineDash([8, 5]);
+      ctx.setLineDash(DASH_TELEGRAPH_RING);
       ctx.beginPath();
       ctx.arc(0, 0, e.telegraphRadius, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.setLineDash(DASH_EMPTY);
 
       ctx.restore();
     }
@@ -755,7 +796,8 @@ export class Renderer {
 
   private drawEnemies(
     ctx: CanvasRenderingContext2D,
-    enemies: readonly EnemyInstance[]
+    enemies: readonly EnemyInstance[],
+    isLowQuality = false
   ): void {
     for (let i = 0; i < enemies.length; i++) {
       const enemy = enemies[i];
@@ -768,26 +810,28 @@ export class Renderer {
       if (enemy.isDying) {
         const t = Math.max(0, enemy.deathTimer / enemy.deathDuration);
         ctx.globalAlpha = t;
-        const shrink = 0.58 + 0.42 * t;
-        ctx.scale(shrink, shrink);
-        ctx.rotate((1 - t) * (enemy.uid % 2 === 0 ? 0.28 : -0.28));
+        if (!isLowQuality) {
+          const shrink = 0.58 + 0.42 * t;
+          ctx.scale(shrink, shrink);
+          ctx.rotate((1 - t) * (enemy.uid % 2 === 0 ? 0.28 : -0.28));
+        }
       }
 
       if (enemy.definitionId === 'siege_boss') {
         ctx.scale(BOSS_VISUAL_SCALE, BOSS_VISUAL_SCALE);
-        this.drawSiegeBoss(ctx, enemy);
+        this.drawSiegeBoss(ctx, enemy, isLowQuality);
       } else {
         ctx.scale(ENEMY_VISUAL_SCALE, ENEMY_VISUAL_SCALE);
         if (enemy.definitionId === 'heavy_tank') {
-          this.drawHeavyTank(ctx, enemy);
+          this.drawHeavyTank(ctx, enemy, isLowQuality);
         } else if (enemy.definitionId === 'artillery') {
-          this.drawArtillery(ctx, enemy);
+          this.drawArtillery(ctx, enemy, isLowQuality);
         } else if (enemy.definitionId === 'assault_tank') {
-          this.drawAssaultTank(ctx, enemy);
+          this.drawAssaultTank(ctx, enemy, isLowQuality);
         } else if (enemy.definitionId === 'runner') {
-          this.drawRunner(ctx, enemy);
+          this.drawRunner(ctx, enemy, isLowQuality);
         } else {
-          this.drawScout(ctx, enemy);
+          this.drawScout(ctx, enemy, isLowQuality);
         }
       }
 
@@ -803,11 +847,15 @@ export class Renderer {
         if (enemy.acidTimer && enemy.acidTimer > 0) {
           ctx.strokeStyle = 'rgba(163, 230, 53, 0.72)';
           ctx.lineWidth = 1.6;
-          ctx.setLineDash([4, 3]);
+          if (!isLowQuality) {
+            ctx.setLineDash(DASH_ACID);
+          }
           ctx.beginPath();
           ctx.arc(0, 0, enemy.radius * 1.04, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.setLineDash([]);
+          if (!isLowQuality) {
+            ctx.setLineDash(DASH_EMPTY);
+          }
         }
       }
 
@@ -817,7 +865,8 @@ export class Renderer {
 
   private drawDelayedStrikes(
     ctx: CanvasRenderingContext2D,
-    strikes: readonly DelayedStrike[]
+    strikes: readonly DelayedStrike[],
+    isLowQuality = false
   ): void {
     for (let i = 0; i < strikes.length; i++) {
       const s = strikes[i];
@@ -832,11 +881,15 @@ export class Renderer {
 
         ctx.strokeStyle = `rgba(103, 232, 249, ${0.45 + progress * 0.45})`;
         ctx.lineWidth = 2;
-        ctx.setLineDash([7, 5]);
+        if (!isLowQuality) {
+          ctx.setLineDash(DASH_ORBITAL);
+        }
         ctx.beginPath();
         ctx.arc(0, 0, s.radius, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.setLineDash([]);
+        if (!isLowQuality) {
+          ctx.setLineDash(DASH_EMPTY);
+        }
 
         ctx.strokeStyle = '#E0F2FE';
         ctx.lineWidth = 1.6;
@@ -853,11 +906,15 @@ export class Renderer {
         ctx.fill();
         ctx.strokeStyle = 'rgba(216, 180, 254, 0.65)';
         ctx.lineWidth = 1.8;
-        ctx.setLineDash([6, 4]);
+        if (!isLowQuality) {
+          ctx.setLineDash(DASH_VORTEX);
+        }
         ctx.beginPath();
         ctx.arc(0, 0, s.radius * 0.78, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.setLineDash([]);
+        if (!isLowQuality) {
+          ctx.setLineDash(DASH_EMPTY);
+        }
         ctx.restore();
       }
     }
@@ -865,17 +922,20 @@ export class Renderer {
 
   private drawTurrets(
     ctx: CanvasRenderingContext2D,
-    turrets: readonly DeployableTurret[]
+    turrets: readonly DeployableTurret[],
+    isLowQuality = false
   ): void {
     for (let i = 0; i < turrets.length; i++) {
       const t = turrets[i];
       ctx.save();
       ctx.translate(t.x, t.y);
 
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
-      ctx.beginPath();
-      ctx.arc(2, 3, 14, 0, Math.PI * 2);
-      ctx.fill();
+      if (!isLowQuality) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
+        ctx.beginPath();
+        ctx.arc(2, 3, 14, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Tripod base
       ctx.fillStyle = '#1E293B';
@@ -903,7 +963,8 @@ export class Renderer {
 
   private drawDrones(
     ctx: CanvasRenderingContext2D,
-    drones: readonly CombatDrone[]
+    drones: readonly CombatDrone[],
+    isLowQuality = false
   ): void {
     for (let i = 0; i < drones.length; i++) {
       const d = drones[i];
@@ -911,10 +972,12 @@ export class Renderer {
       ctx.translate(d.x, d.y);
 
       // Subtle ground shadow
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-      ctx.beginPath();
-      ctx.ellipse(2, 12, 7, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
+      if (!isLowQuality) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.beginPath();
+        ctx.ellipse(2, 12, 7, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       ctx.rotate(d.aimAngle);
 
@@ -977,30 +1040,34 @@ export class Renderer {
     }
   }
 
-  private drawScout(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawScout(
+    ctx: CanvasRenderingContext2D,
+    enemy: EnemyInstance,
+    isLowQuality = false
+  ): void {
     const isHit = enemy.hitFlashTimer > 0;
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
 
     // Compact ground shadow
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.38)';
-    ctx.beginPath();
-    ctx.roundRect(-12, -13, 24, 28, 5);
-    ctx.fill();
+    if (!isLowQuality) {
+      ctx.fillStyle = 'rgba(10, 10, 10, 0.38)';
+      ctx.beginPath();
+      ctx.roundRect(-12, -13, 24, 28, 5);
+      ctx.fill();
+    }
 
     // 4 exposed agile off-road tires
     ctx.fillStyle = '#16181D';
     ctx.strokeStyle = '#090A0C';
     ctx.lineWidth = 1;
-    const wheels = [
-      [-12.5, -10],
-      [8.5, -10],
-      [-12.5, 4],
-      [8.5, 4],
-    ];
-    for (const [wx, wy] of wheels) {
+    for (let w = 0; w < SCOUT_WHEELS.length; w++) {
+      const wx = SCOUT_WHEELS[w][0];
+      const wy = SCOUT_WHEELS[w][1];
       ctx.fillRect(wx, wy, 4, 7);
-      ctx.strokeRect(wx, wy, 4, 7);
+      if (!isLowQuality) {
+        ctx.strokeRect(wx, wy, 4, 7);
+      }
     }
 
     // Twin whip recon antennas at rear
@@ -1050,16 +1117,22 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawAssaultTank(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawAssaultTank(
+    ctx: CanvasRenderingContext2D,
+    enemy: EnemyInstance,
+    isLowQuality = false
+  ): void {
     const isHit = enemy.hitFlashTimer > 0;
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
 
     // Ground shadow
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.44)';
-    ctx.beginPath();
-    ctx.roundRect(-15, -17, 30, 36, 5);
-    ctx.fill();
+    if (!isLowQuality) {
+      ctx.fillStyle = 'rgba(10, 10, 10, 0.44)';
+      ctx.beginPath();
+      ctx.roundRect(-15, -17, 30, 36, 5);
+      ctx.fill();
+    }
 
     // Side armored treads
     ctx.fillStyle = '#181B20';
@@ -1119,16 +1192,22 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawHeavyTank(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawHeavyTank(
+    ctx: CanvasRenderingContext2D,
+    enemy: EnemyInstance,
+    isLowQuality = false
+  ): void {
     const isHit = enemy.hitFlashTimer > 0;
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
 
     // Heavy shadow
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.52)';
-    ctx.beginPath();
-    ctx.roundRect(-21, -22, 42, 46, 6);
-    ctx.fill();
+    if (!isLowQuality) {
+      ctx.fillStyle = 'rgba(10, 10, 10, 0.52)';
+      ctx.beginPath();
+      ctx.roundRect(-21, -22, 42, 46, 6);
+      ctx.fill();
+    }
 
     // Thick armored side track skirts
     ctx.fillStyle = '#191C21';
@@ -1202,16 +1281,22 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawArtillery(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawArtillery(
+    ctx: CanvasRenderingContext2D,
+    enemy: EnemyInstance,
+    isLowQuality = false
+  ): void {
     const isHit = enemy.hitFlashTimer > 0;
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
 
     // Ground shadow
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.44)';
-    ctx.beginPath();
-    ctx.roundRect(-16, -16, 32, 38, 5);
-    ctx.fill();
+    if (!isLowQuality) {
+      ctx.fillStyle = 'rgba(10, 10, 10, 0.44)';
+      ctx.beginPath();
+      ctx.roundRect(-16, -16, 32, 38, 5);
+      ctx.fill();
+    }
 
     // Deployed twin rear recoil stabilizer spades (distinct SPG profile)
     ctx.fillStyle = '#475569';
@@ -1290,36 +1375,42 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawRunner(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawRunner(
+    ctx: CanvasRenderingContext2D,
+    enemy: EnemyInstance,
+    isLowQuality = false
+  ): void {
     const isHit = enemy.hitFlashTimer > 0;
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
 
-    // Fiery rear booster exhaust plume
-    ctx.fillStyle = 'rgba(249, 115, 22, 0.72)';
-    ctx.beginPath();
-    ctx.moveTo(-4, 12);
-    ctx.lineTo(0, 22);
-    ctx.lineTo(4, 12);
-    ctx.closePath();
-    ctx.fill();
+    if (!isLowQuality) {
+      // Fiery rear booster exhaust plume
+      ctx.fillStyle = 'rgba(249, 115, 22, 0.72)';
+      ctx.beginPath();
+      ctx.moveTo(-4, 12);
+      ctx.lineTo(0, 22);
+      ctx.lineTo(4, 12);
+      ctx.closePath();
+      ctx.fill();
 
-    ctx.fillStyle = '#FDE047';
-    ctx.beginPath();
-    ctx.moveTo(-2, 12);
-    ctx.lineTo(0, 17);
-    ctx.lineTo(2, 12);
-    ctx.closePath();
-    ctx.fill();
+      ctx.fillStyle = '#FDE047';
+      ctx.beginPath();
+      ctx.moveTo(-2, 12);
+      ctx.lineTo(0, 17);
+      ctx.lineTo(2, 12);
+      ctx.closePath();
+      ctx.fill();
 
-    // Sleek shadow
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.38)';
-    ctx.beginPath();
-    ctx.moveTo(0, -18);
-    ctx.lineTo(12, 12);
-    ctx.lineTo(-12, 12);
-    ctx.closePath();
-    ctx.fill();
+      // Sleek shadow
+      ctx.fillStyle = 'rgba(10, 10, 10, 0.38)';
+      ctx.beginPath();
+      ctx.moveTo(0, -18);
+      ctx.lineTo(12, 12);
+      ctx.lineTo(-12, 12);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     // Flared rear drive wheels
     ctx.fillStyle = '#18181B';
@@ -1375,7 +1466,11 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawSiegeBoss(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawSiegeBoss(
+    ctx: CanvasRenderingContext2D,
+    enemy: EnemyInstance,
+    isLowQuality = false
+  ): void {
     const isChargingSiege = Boolean(enemy.telegraphTimer && enemy.telegraphTimer > 0);
     const isChargingBurst = Boolean(
       (enemy.burstChargeTimer && enemy.burstChargeTimer > 0) ||
@@ -1407,10 +1502,12 @@ export class Renderer {
     }
 
     // Heavy ground shadow
-    ctx.fillStyle = 'rgba(8, 10, 12, 0.55)';
-    ctx.beginPath();
-    ctx.roundRect(-31, -32, 62, 68, 9);
-    ctx.fill();
+    if (!isLowQuality) {
+      ctx.fillStyle = 'rgba(8, 10, 12, 0.55)';
+      ctx.beginPath();
+      ctx.roundRect(-31, -32, 62, 68, 9);
+      ctx.fill();
+    }
 
     // Heavy armored twin track pods
     ctx.fillStyle = '#181B20';
@@ -1423,16 +1520,18 @@ export class Renderer {
     ctx.stroke();
 
     // Track cleats
-    ctx.strokeStyle = '#333A44';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let ty = -26; ty <= 26; ty += 7) {
-      ctx.moveTo(-29, ty);
-      ctx.lineTo(-18, ty);
-      ctx.moveTo(18, ty);
-      ctx.lineTo(29, ty);
+    if (!isLowQuality) {
+      ctx.strokeStyle = '#333A44';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let ty = -26; ty <= 26; ty += 7) {
+        ctx.moveTo(-29, ty);
+        ctx.lineTo(-18, ty);
+        ctx.moveTo(18, ty);
+        ctx.lineTo(29, ty);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
 
     // Armored Dreadnought Chassis
     ctx.fillStyle = enemy.hitFlashTimer > 0 ? '#FCA5A5' : '#4E1F27';
@@ -1507,7 +1606,11 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawPlayerTank(ctx: CanvasRenderingContext2D, tank: PlayerTankState): void {
+  private drawPlayerTank(
+    ctx: CanvasRenderingContext2D,
+    tank: PlayerTankState,
+    isLowQuality = false
+  ): void {
     ctx.save();
     ctx.translate(
       tank.position.x + (tank.bodyRecoilX || 0),
@@ -1515,23 +1618,27 @@ export class Renderer {
     );
     ctx.scale(PLAYER_TANK_VISUAL_SCALE, PLAYER_TANK_VISUAL_SCALE);
 
-    ctx.fillStyle = 'rgba(10, 12, 10, 0.46)';
-    ctx.beginPath();
-    ctx.roundRect(-29, -27, 62, 62, 10);
-    ctx.fill();
+    if (!isLowQuality) {
+      ctx.fillStyle = 'rgba(10, 12, 10, 0.46)';
+      ctx.beginPath();
+      ctx.roundRect(-29, -27, 62, 62, 10);
+      ctx.fill();
+    }
 
     this.drawTankHull(
       ctx,
       tank.hullAngle,
       tank.hitFlashTimer > 0,
       tank.isMoving,
-      tank.idlePhase
+      tank.idlePhase,
+      isLowQuality
     );
     this.drawTankTurret(
       ctx,
       tank.turretAngle,
       tank.recoilOffset,
-      tank.hitFlashTimer > 0
+      tank.hitFlashTimer > 0,
+      isLowQuality
     );
 
     if (tank.hitFlashTimer > 0) {
@@ -1547,11 +1654,15 @@ export class Renderer {
     if ((tank.overdriveTimer ?? 0) > 0) {
       ctx.strokeStyle = 'rgba(251, 191, 36, 0.72)';
       ctx.lineWidth = 2;
-      ctx.setLineDash([5, 4]);
+      if (!isLowQuality) {
+        ctx.setLineDash(DASH_OVERDRIVE);
+      }
       ctx.beginPath();
       ctx.arc(0, 0, 34, tank.idlePhase * 0.6, tank.idlePhase * 0.6 + Math.PI * 2);
       ctx.stroke();
-      ctx.setLineDash([]);
+      if (!isLowQuality) {
+        ctx.setLineDash(DASH_EMPTY);
+      }
     }
 
     // Reactive Energy Shield Barrier
@@ -1575,7 +1686,8 @@ export class Renderer {
     hullAngle: number,
     isHitFlash: boolean,
     isMoving: boolean,
-    idlePhase: number
+    idlePhase: number,
+    isLowQuality = false
   ): void {
     ctx.save();
     ctx.rotate(hullAngle + Math.PI / 2);
@@ -1589,18 +1701,20 @@ export class Renderer {
     ctx.fill();
     ctx.stroke();
 
-    // Animated tread cleats when driving
-    const treadShift = isMoving ? (idlePhase * 8) % 6 : 0;
-    ctx.strokeStyle = '#3B444E';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let ty = -24 + treadShift; ty <= 24; ty += 6) {
-      ctx.moveTo(-26, ty);
-      ctx.lineTo(-16, ty);
-      ctx.moveTo(16, ty);
-      ctx.lineTo(26, ty);
+    // Animated tread cleats when driving (high quality only)
+    if (!isLowQuality) {
+      const treadShift = isMoving ? (idlePhase * 8) % 6 : 0;
+      ctx.strokeStyle = '#3B444E';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let ty = -24 + treadShift; ty <= 24; ty += 6) {
+        ctx.moveTo(-26, ty);
+        ctx.lineTo(-16, ty);
+        ctx.moveTo(16, ty);
+        ctx.lineTo(26, ty);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
 
     ctx.fillStyle = isHitFlash ? '#FDA4AF' : '#3E5238';
     ctx.strokeStyle = '#1E281B';
@@ -1634,14 +1748,16 @@ export class Renderer {
     ctx.fillRect(-13, -25, 4, 2);
     ctx.fillRect(9, -25, 4, 2);
 
-    ctx.fillStyle = '#3C5035';
-    ctx.strokeStyle = '#243120';
-    ctx.lineWidth = 1;
-    for (let sy = -8; sy <= 8; sy += 8) {
-      ctx.fillRect(-19, sy, 3.5, 6);
-      ctx.strokeRect(-19, sy, 3.5, 6);
-      ctx.fillRect(15.5, sy, 3.5, 6);
-      ctx.strokeRect(15.5, sy, 3.5, 6);
+    if (!isLowQuality) {
+      ctx.fillStyle = '#3C5035';
+      ctx.strokeStyle = '#243120';
+      ctx.lineWidth = 1;
+      for (let sy = -8; sy <= 8; sy += 8) {
+        ctx.fillRect(-19, sy, 3.5, 6);
+        ctx.strokeRect(-19, sy, 3.5, 6);
+        ctx.fillRect(15.5, sy, 3.5, 6);
+        ctx.strokeRect(15.5, sy, 3.5, 6);
+      }
     }
 
     ctx.fillStyle = '#2A3726';
@@ -1651,14 +1767,16 @@ export class Renderer {
     ctx.fill();
     ctx.stroke();
 
-    ctx.strokeStyle = '#151C13';
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    for (let vx = -8; vx <= 8; vx += 4) {
-      ctx.moveTo(vx, 14);
-      ctx.lineTo(vx, 21);
+    if (!isLowQuality) {
+      ctx.strokeStyle = '#151C13';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let vx = -8; vx <= 8; vx += 4) {
+        ctx.moveTo(vx, 14);
+        ctx.lineTo(vx, 21);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
 
     ctx.restore();
   }
@@ -1667,15 +1785,18 @@ export class Renderer {
     ctx: CanvasRenderingContext2D,
     turretAngle: number,
     recoilOffset: number,
-    isHitFlash: boolean
+    isHitFlash: boolean,
+    isLowQuality = false
   ): void {
     ctx.save();
     ctx.rotate(turretAngle + Math.PI / 2);
 
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
-    ctx.beginPath();
-    ctx.arc(2, 3, 17, 0, Math.PI * 2);
-    ctx.fill();
+    if (!isLowQuality) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
+      ctx.beginPath();
+      ctx.arc(2, 3, 17, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     ctx.save();
     ctx.translate(0, recoilOffset);
@@ -1762,19 +1883,15 @@ export class Renderer {
 
   private drawProjectiles(
     ctx: CanvasRenderingContext2D,
-    projectiles: readonly ProjectileInstance[]
+    projectiles: readonly ProjectileInstance[],
+    isLowQuality = false
   ): void {
     for (let i = 0; i < projectiles.length; i++) {
       const p = projectiles[i];
       if (!p.active) continue;
 
-      if (p.kind === 'mortar_shell') {
-        this.drawMortarShell(ctx, p);
-        continue;
-      }
-
-      if (p.kind === 'cluster_bomblet') {
-        this.drawMortarShell(ctx, p);
+      if (p.kind === 'mortar_shell' || p.kind === 'cluster_bomblet') {
+        this.drawMortarShell(ctx, p, isLowQuality);
         continue;
       }
 
@@ -1788,14 +1905,16 @@ export class Renderer {
         const isTurret = p.kind === 'turret_round';
         const isDrone = p.kind === 'drone_bolt';
         const trailLen = 15 + tier * 2.2;
-        ctx.fillStyle = isTurret
-          ? 'rgba(52, 211, 153, 0.34)'
-          : isDrone
-            ? 'rgba(251, 191, 36, 0.36)'
-            : tier >= 4
-              ? 'rgba(254, 240, 138, 0.36)'
-              : 'rgba(250, 204, 21, 0.28)';
-        ctx.fillRect(-trailLen - 4, -1.7, trailLen, 3.4);
+        if (!isLowQuality) {
+          ctx.fillStyle = isTurret
+            ? 'rgba(52, 211, 153, 0.34)'
+            : isDrone
+              ? 'rgba(251, 191, 36, 0.36)'
+              : tier >= 4
+                ? 'rgba(254, 240, 138, 0.36)'
+                : 'rgba(250, 204, 21, 0.28)';
+          ctx.fillRect(-trailLen - 4, -1.7, trailLen, 3.4);
+        }
 
         ctx.fillStyle = isTurret
           ? '#6EE7B7'
@@ -1816,10 +1935,12 @@ export class Renderer {
         ctx.closePath();
         ctx.fill();
       } else if (p.kind === 'ricochet_slug') {
-        ctx.fillStyle = 'rgba(45, 212, 191, 0.35)';
-        ctx.beginPath();
-        ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
-        ctx.fill();
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(45, 212, 191, 0.35)';
+          ctx.beginPath();
+          ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
         ctx.fillStyle = '#99F6E4';
         ctx.strokeStyle = '#0F766E';
         ctx.lineWidth = 1.2;
@@ -1828,8 +1949,10 @@ export class Renderer {
         ctx.fill();
         ctx.stroke();
       } else if (p.kind === 'frost_shell') {
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.3)';
-        ctx.fillRect(-20, -2.8, 20, 5.6);
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(56, 189, 248, 0.3)';
+          ctx.fillRect(-20, -2.8, 20, 5.6);
+        }
         ctx.fillStyle = '#BAE6FD';
         ctx.strokeStyle = '#0284C7';
         ctx.lineWidth = 1.2;
@@ -1842,8 +1965,10 @@ export class Renderer {
         ctx.fill();
         ctx.stroke();
       } else if (p.kind === 'acid_shell') {
-        ctx.fillStyle = 'rgba(132, 204, 22, 0.32)';
-        ctx.fillRect(-18, -2.6, 18, 5.2);
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(132, 204, 22, 0.32)';
+          ctx.fillRect(-18, -2.6, 18, 5.2);
+        }
         ctx.fillStyle = '#BEF264';
         ctx.strokeStyle = '#3F6212';
         ctx.lineWidth = 1.2;
@@ -1852,10 +1977,12 @@ export class Renderer {
         ctx.fill();
         ctx.stroke();
       } else if (p.kind === 'plasma_orb') {
-        ctx.fillStyle = 'rgba(168, 85, 247, 0.32)';
-        ctx.beginPath();
-        ctx.arc(0, 0, 11.5, 0, Math.PI * 2);
-        ctx.fill();
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(168, 85, 247, 0.32)';
+          ctx.beginPath();
+          ctx.arc(0, 0, 11.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
         ctx.fillStyle = '#E9D5FF';
         ctx.strokeStyle = '#7E22CE';
         ctx.lineWidth = 1.5;
@@ -1872,8 +1999,10 @@ export class Renderer {
         ctx.closePath();
         ctx.fill();
       } else if (p.kind === 'pierce_slug') {
-        ctx.fillStyle = 'rgba(251, 191, 36, 0.35)';
-        ctx.fillRect(-26, -2.4, 26, 4.8);
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(251, 191, 36, 0.35)';
+          ctx.fillRect(-26, -2.4, 26, 4.8);
+        }
         ctx.fillStyle = '#FEF3C7';
         ctx.strokeStyle = '#D97706';
         ctx.lineWidth = 1;
@@ -1885,8 +2014,10 @@ export class Renderer {
         ctx.fill();
         ctx.stroke();
       } else if (p.kind === 'cluster_bomb') {
-        ctx.fillStyle = 'rgba(249, 115, 22, 0.4)';
-        ctx.fillRect(-16, -2.8, 16, 5.6);
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(249, 115, 22, 0.4)';
+          ctx.fillRect(-16, -2.8, 16, 5.6);
+        }
         ctx.fillStyle = '#F97316';
         ctx.strokeStyle = '#7C2D12';
         ctx.lineWidth = 1.2;
@@ -1904,21 +2035,23 @@ export class Renderer {
         const rocketScale = (isHunter ? 1.12 : 1.24) + (tier - 1) * 0.08;
         ctx.scale(rocketScale, rocketScale);
 
-        ctx.fillStyle = isHunter
-          ? 'rgba(244, 114, 182, 0.72)'
-          : isShrapnel
-            ? 'rgba(251, 146, 60, 0.7)'
-            : tier >= 4
-              ? 'rgba(251, 113, 133, 0.75)'
-              : 'rgba(249, 115, 22, 0.78)';
-        ctx.beginPath();
-        ctx.moveTo(-6, -2);
-        ctx.lineTo(-18 - tier * 1.6, -3.2);
-        ctx.lineTo(-14, 0);
-        ctx.lineTo(-18 - tier * 1.6, 3.2);
-        ctx.lineTo(-6, 2);
-        ctx.closePath();
-        ctx.fill();
+        if (!isLowQuality) {
+          ctx.fillStyle = isHunter
+            ? 'rgba(244, 114, 182, 0.72)'
+            : isShrapnel
+              ? 'rgba(251, 146, 60, 0.7)'
+              : tier >= 4
+                ? 'rgba(251, 113, 133, 0.75)'
+                : 'rgba(249, 115, 22, 0.78)';
+          ctx.beginPath();
+          ctx.moveTo(-6, -2);
+          ctx.lineTo(-18 - tier * 1.6, -3.2);
+          ctx.lineTo(-14, 0);
+          ctx.lineTo(-18 - tier * 1.6, 3.2);
+          ctx.lineTo(-6, 2);
+          ctx.closePath();
+          ctx.fill();
+        }
 
         ctx.fillStyle = '#E2E8F0';
         ctx.strokeStyle = '#334155';
@@ -1939,8 +2072,10 @@ export class Renderer {
         const slugScale = 1.24 + (tier - 1) * 0.11;
         ctx.scale(slugScale, slugScale);
 
-        ctx.fillStyle = 'rgba(34, 211, 238, 0.34)';
-        ctx.fillRect(-32 - tier * 3, -3.4, 32 + tier * 3, 6.8);
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(34, 211, 238, 0.34)';
+          ctx.fillRect(-32 - tier * 3, -3.4, 32 + tier * 3, 6.8);
+        }
 
         ctx.fillStyle = 'rgba(165, 243, 252, 0.72)';
         ctx.fillRect(-20 - tier * 2, -1.4, 20 + tier * 2, 2.8);
@@ -1961,27 +2096,28 @@ export class Renderer {
       } else if (p.kind === 'enemy_artillery_shell') {
         ctx.scale(1.2, 1.2);
         // Hostile glowing crimson-amber artillery shell with bright readable outline
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.34)';
-        ctx.beginPath();
-        ctx.moveTo(-22, 0);
-        ctx.lineTo(-4, -3.5);
-        ctx.lineTo(-4, 3.5);
-        ctx.closePath();
-        ctx.fill();
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.34)';
+          ctx.beginPath();
+          ctx.moveTo(-22, 0);
+          ctx.lineTo(-4, -3.5);
+          ctx.lineTo(-4, 3.5);
+          ctx.closePath();
+          ctx.fill();
 
-        ctx.fillStyle = 'rgba(251, 146, 60, 0.78)';
-        ctx.beginPath();
-        ctx.moveTo(-14, 0);
-        ctx.lineTo(-3, -1.7);
-        ctx.lineTo(-3, 1.7);
-        ctx.closePath();
-        ctx.fill();
+          ctx.fillStyle = 'rgba(251, 146, 60, 0.78)';
+          ctx.beginPath();
+          ctx.moveTo(-14, 0);
+          ctx.lineTo(-3, -1.7);
+          ctx.lineTo(-3, 1.7);
+          ctx.closePath();
+          ctx.fill();
 
-        // Outer hostile crimson aura ring
-        ctx.fillStyle = 'rgba(244, 63, 94, 0.28)';
-        ctx.beginPath();
-        ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
-        ctx.fill();
+          ctx.fillStyle = 'rgba(244, 63, 94, 0.28)';
+          ctx.beginPath();
+          ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
         // Pointed artillery shell body
         ctx.fillStyle = '#EF4444';
@@ -2007,26 +2143,28 @@ export class Renderer {
         const scale = tier >= 2 ? 1.48 : 1.26;
         ctx.scale(scale, scale);
 
-        ctx.fillStyle = 'rgba(244, 63, 94, 0.36)';
-        ctx.beginPath();
-        ctx.moveTo(-26, 0);
-        ctx.lineTo(-5, -4.5);
-        ctx.lineTo(-5, 4.5);
-        ctx.closePath();
-        ctx.fill();
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(244, 63, 94, 0.36)';
+          ctx.beginPath();
+          ctx.moveTo(-26, 0);
+          ctx.lineTo(-5, -4.5);
+          ctx.lineTo(-5, 4.5);
+          ctx.closePath();
+          ctx.fill();
 
-        ctx.fillStyle = 'rgba(253, 224, 71, 0.8)';
-        ctx.beginPath();
-        ctx.moveTo(-15, 0);
-        ctx.lineTo(-3, -1.8);
-        ctx.lineTo(-3, 1.8);
-        ctx.closePath();
-        ctx.fill();
+          ctx.fillStyle = 'rgba(253, 224, 71, 0.8)';
+          ctx.beginPath();
+          ctx.moveTo(-15, 0);
+          ctx.lineTo(-3, -1.8);
+          ctx.lineTo(-3, 1.8);
+          ctx.closePath();
+          ctx.fill();
 
-        ctx.fillStyle = 'rgba(225, 29, 72, 0.3)';
-        ctx.beginPath();
-        ctx.arc(0, 0, 8.8, 0, Math.PI * 2);
-        ctx.fill();
+          ctx.fillStyle = 'rgba(225, 29, 72, 0.3)';
+          ctx.beginPath();
+          ctx.arc(0, 0, 8.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
         ctx.fillStyle = '#E11D48';
         ctx.strokeStyle = '#4C0519';
@@ -2058,29 +2196,31 @@ export class Renderer {
 
         const trailLen = isHeavy ? 22 + (tier - 1) * 3.5 : isCrit ? 28 : 21;
 
-        // Outer wake sheath
-        ctx.fillStyle = isCrit
-          ? 'rgba(253, 224, 71, 0.32)'
-          : isHeavy
-            ? 'rgba(249, 115, 22, 0.3)'
-            : 'rgba(251, 191, 36, 0.28)';
-        ctx.beginPath();
-        ctx.moveTo(-trailLen, 0);
-        ctx.lineTo(-4, -2.8);
-        ctx.lineTo(-4, 2.8);
-        ctx.closePath();
-        ctx.fill();
+        if (!isLowQuality) {
+          // Outer wake sheath
+          ctx.fillStyle = isCrit
+            ? 'rgba(253, 224, 71, 0.32)'
+            : isHeavy
+              ? 'rgba(249, 115, 22, 0.3)'
+              : 'rgba(251, 191, 36, 0.28)';
+          ctx.beginPath();
+          ctx.moveTo(-trailLen, 0);
+          ctx.lineTo(-4, -2.8);
+          ctx.lineTo(-4, 2.8);
+          ctx.closePath();
+          ctx.fill();
 
-        // Inner bright tracer core
-        ctx.fillStyle = isCrit
-          ? 'rgba(254, 249, 195, 0.85)'
-          : 'rgba(253, 224, 71, 0.72)';
-        ctx.beginPath();
-        ctx.moveTo(-trailLen * 0.65, 0);
-        ctx.lineTo(-4, -1.3);
-        ctx.lineTo(-4, 1.3);
-        ctx.closePath();
-        ctx.fill();
+          // Inner bright tracer core
+          ctx.fillStyle = isCrit
+            ? 'rgba(254, 249, 195, 0.85)'
+            : 'rgba(253, 224, 71, 0.72)';
+          ctx.beginPath();
+          ctx.moveTo(-trailLen * 0.65, 0);
+          ctx.lineTo(-4, -1.3);
+          ctx.lineTo(-4, 1.3);
+          ctx.closePath();
+          ctx.fill();
+        }
 
         // Tapered brass/steel shell casing
         ctx.fillStyle = isHeavy
@@ -2124,7 +2264,8 @@ export class Renderer {
 
   private drawMortarShell(
     ctx: CanvasRenderingContext2D,
-    p: ProjectileInstance
+    p: ProjectileInstance,
+    isLowQuality = false
   ): void {
     const t =
       p.flightDuration && p.flightElapsed !== undefined
@@ -2133,12 +2274,14 @@ export class Renderer {
     const arcHeight = Math.sin(t * Math.PI) * 62;
     const tier = Math.max(1, Math.min(5, p.visualTier ?? 1));
 
-    // Ground shadow beneath arcing shell
     ctx.save();
-    ctx.fillStyle = `rgba(0, 0, 0, ${0.38 - Math.sin(t * Math.PI) * 0.14})`;
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y, 6.5, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
+    if (!isLowQuality) {
+      // Ground shadow beneath arcing shell
+      ctx.fillStyle = `rgba(0, 0, 0, ${0.38 - Math.sin(t * Math.PI) * 0.14})`;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 6.5, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // Elevated finned artillery bomb pitched gently along arc
     ctx.translate(p.x, p.y - arcHeight);
@@ -2146,14 +2289,16 @@ export class Renderer {
     const scale = (1.12 + Math.sin(t * Math.PI) * 0.54) * (1 + (tier - 1) * 0.08);
     ctx.scale(scale, scale);
 
-    // Tracer glow behind mortar bomb
-    ctx.fillStyle = 'rgba(249, 115, 22, 0.52)';
-    ctx.beginPath();
-    ctx.moveTo(-7, -2.5);
-    ctx.lineTo(-16, 0);
-    ctx.lineTo(-7, 2.5);
-    ctx.closePath();
-    ctx.fill();
+    if (!isLowQuality) {
+      // Tracer glow behind mortar bomb
+      ctx.fillStyle = 'rgba(249, 115, 22, 0.52)';
+      ctx.beginPath();
+      ctx.moveTo(-7, -2.5);
+      ctx.lineTo(-16, 0);
+      ctx.lineTo(-7, 2.5);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     ctx.fillStyle = tier >= 4 ? '#1E293B' : '#334155';
     ctx.strokeStyle = '#0F172A';
@@ -2278,40 +2423,49 @@ export class Renderer {
         ctx.lineTo(fx.tx, fx.ty);
         ctx.stroke();
       } else if (fx.kind === 'rail_beam') {
-        // Outer cyan ionized glow
-        ctx.strokeStyle = fx.color;
-        ctx.lineWidth = Math.max(1.8, fx.size * 2.5 * ratio);
         ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(fx.x, fx.y);
-        ctx.lineTo(fx.tx, fx.ty);
-        ctx.stroke();
+        if (isLowQuality) {
+          ctx.strokeStyle = fx.color;
+          ctx.lineWidth = Math.max(1.8, fx.size * 1.4 * ratio);
+          ctx.beginPath();
+          ctx.moveTo(fx.x, fx.y);
+          ctx.lineTo(fx.tx, fx.ty);
+          ctx.stroke();
+        } else {
+          // Outer cyan ionized glow
+          ctx.strokeStyle = fx.color;
+          ctx.lineWidth = Math.max(1.8, fx.size * 2.5 * ratio);
+          ctx.beginPath();
+          ctx.moveTo(fx.x, fx.y);
+          ctx.lineTo(fx.tx, fx.ty);
+          ctx.stroke();
 
-        // Crisp white-hot beam core
-        ctx.strokeStyle = fx.secondaryColor ?? '#ECFEFF';
-        ctx.lineWidth = Math.max(1.2, fx.size * 0.8 * ratio);
-        ctx.beginPath();
-        ctx.moveTo(fx.x, fx.y);
-        ctx.lineTo(fx.tx, fx.ty);
-        ctx.stroke();
+          // Crisp white-hot beam core
+          ctx.strokeStyle = fx.secondaryColor ?? '#ECFEFF';
+          ctx.lineWidth = Math.max(1.2, fx.size * 0.8 * ratio);
+          ctx.beginPath();
+          ctx.moveTo(fx.x, fx.y);
+          ctx.lineTo(fx.tx, fx.ty);
+          ctx.stroke();
 
-        // Subtle perpendicular capacitor ticks near muzzle
-        const nx = -Math.sin(fx.angle);
-        const ny = Math.cos(fx.angle);
-        const dx = Math.cos(fx.angle);
-        const dy = Math.sin(fx.angle);
-        ctx.strokeStyle = 'rgba(165, 243, 252, 0.75)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let t = 1; t <= 3; t++) {
-          const dist = t * 48;
-          const tickHalf = (9.5 - t * 1.6) * ratio;
-          const px = fx.x + dx * dist;
-          const py = fx.y + dy * dist;
-          ctx.moveTo(px - nx * tickHalf, py - ny * tickHalf);
-          ctx.lineTo(px + nx * tickHalf, py + ny * tickHalf);
+          // Subtle perpendicular capacitor ticks near muzzle
+          const nx = -Math.sin(fx.angle);
+          const ny = Math.cos(fx.angle);
+          const dx = Math.cos(fx.angle);
+          const dy = Math.sin(fx.angle);
+          ctx.strokeStyle = 'rgba(165, 243, 252, 0.75)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          for (let t = 1; t <= 3; t++) {
+            const dist = t * 48;
+            const tickHalf = (9.5 - t * 1.6) * ratio;
+            const px = fx.x + dx * dist;
+            const py = fx.y + dy * dist;
+            ctx.moveTo(px - nx * tickHalf, py - ny * tickHalf);
+            ctx.lineTo(px + nx * tickHalf, py + ny * tickHalf);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
       } else if (fx.kind === 'lightning_arc' && fx.points && fx.points.length >= 2) {
         const seed = fx.seed ?? 1;
         ctx.lineJoin = 'round';
@@ -2339,60 +2493,68 @@ export class Renderer {
           ctx.stroke();
         };
 
-        drawBolt(fx.color, 3.6);
-        drawBolt(fx.secondaryColor ?? '#E0F2FE', 1.4);
+        drawBolt(fx.color, isLowQuality ? 2.4 : 3.6);
+        if (!isLowQuality) {
+          drawBolt(fx.secondaryColor ?? '#E0F2FE', 1.4);
+        }
       } else if (fx.kind === 'flame_cone') {
         const half = fx.coneHalfAngle ?? 0.45;
         const seed = fx.seed ?? 1;
-        const flicker = 0.92 + hash01(seed, Math.floor(progress * 6)) * 0.14;
+        const flicker = isLowQuality ? 1 : 0.92 + hash01(seed, Math.floor(progress * 6)) * 0.14;
         ctx.translate(fx.x, fx.y);
         ctx.rotate(fx.angle);
 
         const len = fx.size * (0.86 + progress * 0.22) * flicker;
         // Layer 1: Outer crimson-orange wash
-        ctx.fillStyle = 'rgba(234, 88, 12, 0.42)';
+        ctx.fillStyle = isLowQuality ? 'rgba(249, 115, 22, 0.48)' : 'rgba(234, 88, 12, 0.42)';
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.arc(0, 0, len, -half, half);
         ctx.closePath();
         ctx.fill();
 
-        // Layer 2: Mid-cone flickering tongues
-        ctx.fillStyle = 'rgba(249, 115, 22, 0.58)';
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.arc(0, 0, len * 0.82, -half * 0.78, half * 0.78);
-        ctx.closePath();
-        ctx.fill();
+        if (!isLowQuality) {
+          // Layer 2: Mid-cone flickering tongues
+          ctx.fillStyle = 'rgba(249, 115, 22, 0.58)';
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.arc(0, 0, len * 0.82, -half * 0.78, half * 0.78);
+          ctx.closePath();
+          ctx.fill();
 
-        // Layer 3: Inner bright amber-white core
-        ctx.fillStyle = 'rgba(253, 224, 71, 0.78)';
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.arc(0, 0, len * 0.54, -half * 0.46, half * 0.46);
-        ctx.closePath();
-        ctx.fill();
+          // Layer 3: Inner bright amber-white core
+          ctx.fillStyle = 'rgba(253, 224, 71, 0.78)';
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.arc(0, 0, len * 0.54, -half * 0.46, half * 0.46);
+          ctx.closePath();
+          ctx.fill();
+        }
       } else if (fx.kind === 'laser_beam') {
-        ctx.strokeStyle = fx.color;
-        ctx.lineWidth = Math.max(2, fx.size * 2.2 * ratio);
         ctx.lineCap = 'round';
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = Math.max(2, fx.size * (isLowQuality ? 1.5 : 2.2) * ratio);
         ctx.beginPath();
         ctx.moveTo(fx.x, fx.y);
         ctx.lineTo(fx.tx, fx.ty);
         ctx.stroke();
 
-        ctx.strokeStyle = fx.secondaryColor ?? '#FFE4E6';
-        ctx.lineWidth = Math.max(1, fx.size * 0.75 * ratio);
-        ctx.beginPath();
-        ctx.moveTo(fx.x, fx.y);
-        ctx.lineTo(fx.tx, fx.ty);
-        ctx.stroke();
+        if (!isLowQuality) {
+          ctx.strokeStyle = fx.secondaryColor ?? '#FFE4E6';
+          ctx.lineWidth = Math.max(1, fx.size * 0.75 * ratio);
+          ctx.beginPath();
+          ctx.moveTo(fx.x, fx.y);
+          ctx.lineTo(fx.tx, fx.ty);
+          ctx.stroke();
+        }
       } else if (fx.kind === 'orbital_beam') {
         const beamW = fx.size * (0.4 + ratio * 0.75);
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.28)';
+        ctx.fillStyle = isLowQuality ? 'rgba(56, 189, 248, 0.45)' : 'rgba(56, 189, 248, 0.28)';
         ctx.fillRect(fx.x - beamW, fx.y - 420, beamW * 2, 420);
-        ctx.fillStyle = 'rgba(224, 242, 254, 0.85)';
-        ctx.fillRect(fx.x - beamW * 0.38, fx.y - 420, beamW * 0.76, 420);
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(224, 242, 254, 0.85)';
+          ctx.fillRect(fx.x - beamW * 0.38, fx.y - 420, beamW * 0.76, 420);
+        }
         ctx.strokeStyle = fx.color;
         ctx.lineWidth = 2.4;
         ctx.beginPath();
@@ -2408,9 +2570,11 @@ export class Renderer {
         ctx.lineTo(fx.x + (hash01(seed, 3) - 0.5) * 18, fx.y - 80);
         ctx.lineTo(fx.x, fx.y);
         ctx.stroke();
-        ctx.strokeStyle = fx.secondaryColor ?? '#EFF6FF';
-        ctx.lineWidth = Math.max(1, fx.size * 0.42 * ratio);
-        ctx.stroke();
+        if (!isLowQuality) {
+          ctx.strokeStyle = fx.secondaryColor ?? '#EFF6FF';
+          ctx.lineWidth = Math.max(1, fx.size * 0.42 * ratio);
+          ctx.stroke();
+        }
       } else if (fx.kind === 'shockwave_ring' || fx.kind === 'shield_pulse') {
         ctx.translate(fx.x, fx.y);
         const radius = fx.size * (0.3 + progress * 0.72);
@@ -2419,11 +2583,13 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.strokeStyle = fx.secondaryColor ?? '#E2E8F0';
-        ctx.lineWidth = Math.max(1, 1.8 * ratio);
-        ctx.beginPath();
-        ctx.arc(0, 0, radius * 0.82, 0, Math.PI * 2);
-        ctx.stroke();
+        if (!isLowQuality) {
+          ctx.strokeStyle = fx.secondaryColor ?? '#E2E8F0';
+          ctx.lineWidth = Math.max(1, 1.8 * ratio);
+          ctx.beginPath();
+          ctx.arc(0, 0, radius * 0.82, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       } else if (fx.kind === 'blast_ring') {
         ctx.translate(fx.x, fx.y);
         const radius = fx.size * (0.4 + progress * 0.66);
@@ -2524,45 +2690,54 @@ export class Renderer {
 
   private drawDamageNumbers(
     ctx: CanvasRenderingContext2D,
-    effects: readonly VisualEffect[]
+    effects: readonly VisualEffect[],
+    isLowQuality = false
   ): void {
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    let currentFontMode: 'none' | 'normal' | 'crit' = 'none';
 
     for (let i = 0; i < effects.length; i++) {
       const fx = effects[i];
       if (fx.kind !== 'damage_text' || fx.value === undefined) continue;
 
       const ratio = Math.max(0, fx.life / fx.maxLife);
-      const progress = 1 - ratio;
       const alpha = ratio > 0.25 ? 1 : ratio / 0.25;
 
-      ctx.save();
-      ctx.globalAlpha = alpha;
-
       if (fx.isCrit) {
+        const progress = 1 - ratio;
         const pop = progress < 0.18 ? 1 + (0.18 - progress) * 1.4 : 1;
+        ctx.save();
+        ctx.globalAlpha = alpha;
         ctx.translate(fx.x, fx.y);
         ctx.scale(pop, pop);
-        ctx.font = '800 14px "JetBrains Mono", monospace';
+        if (currentFontMode !== 'crit') {
+          ctx.font = '800 14px "JetBrains Mono", monospace';
+          currentFontMode = 'crit';
+        }
         const label = `-${fx.value}!`;
         ctx.lineWidth = 3.5;
         ctx.strokeStyle = 'rgba(10, 12, 16, 0.92)';
         ctx.strokeText(label, 0, 0);
         ctx.fillStyle = fx.color;
         ctx.fillText(label, 0, 0);
+        ctx.restore();
       } else {
-        ctx.font = '700 11.5px "JetBrains Mono", monospace';
+        ctx.globalAlpha = alpha;
+        if (currentFontMode !== 'normal') {
+          ctx.font = '700 11.5px "JetBrains Mono", monospace';
+          currentFontMode = 'normal';
+        }
         const label = `-${fx.value}`;
-        ctx.lineWidth = 2.8;
-        ctx.strokeStyle = 'rgba(10, 12, 16, 0.88)';
-        ctx.strokeText(label, fx.x, fx.y);
+        if (!isLowQuality) {
+          ctx.lineWidth = 2.8;
+          ctx.strokeStyle = 'rgba(10, 12, 16, 0.88)';
+          ctx.strokeText(label, fx.x, fx.y);
+        }
         ctx.fillStyle = fx.color;
         ctx.fillText(label, fx.x, fx.y);
       }
-
-      ctx.restore();
     }
 
     ctx.restore();

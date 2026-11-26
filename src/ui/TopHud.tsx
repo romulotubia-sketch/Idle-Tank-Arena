@@ -89,7 +89,7 @@ export function TopHud({
       : 0;
 
   return (
-    <header className="shrink-0 h-10 sm:h-11 bg-[#161C24] border-b border-[#2D3846] px-2 sm:px-3 select-none z-20">
+    <header className="shrink-0 h-11 bg-[#161C24] border-b border-[#2D3846] px-2 sm:px-3 select-none z-20">
       <div className="h-full flex items-center justify-between gap-2 sm:gap-3 max-w-[1600px] mx-auto">
         {/* Left: Compact Wave Number + Inline Wave/Boss Progress */}
         <div className="flex items-center gap-2 min-w-0 flex-1 max-w-[440px]">
@@ -235,16 +235,16 @@ export function TopHud({
             aria-label={phase === 'PAUSED' ? 'Resume battle' : 'Pause battle'}
             title={phase === 'PAUSED' ? 'Resume Battle (Esc)' : 'Pause Battle (Esc)'}
             disabled={phase !== 'ACTIVE' && phase !== 'PAUSED'}
-            className={`inline-flex items-center justify-center gap-1.5 min-w-[32px] sm:min-w-[36px] h-7 sm:h-8 px-2 lg:px-2.5 rounded-md border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-45 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
+            className={`inline-flex items-center justify-center gap-1.5 min-w-[36px] h-8 sm:h-9 px-2 lg:px-2.5 rounded-md border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-45 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
               phase === 'PAUSED'
                 ? 'bg-emerald-950/80 hover:bg-emerald-900/80 border-emerald-400/70 text-emerald-100'
                 : 'bg-[#232D3A] hover:bg-[#2E3A4A] active:bg-[#1B232D] border-[#3C4A5C] text-slate-100'
             }`}
           >
             {phase === 'PAUSED' ? (
-              <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-300 shrink-0" />
+              <Play className="w-4 h-4 text-emerald-300 shrink-0" />
             ) : (
-              <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-300 shrink-0" />
+              <Pause className="w-4 h-4 text-sky-300 shrink-0" />
             )}
             <span className="hidden lg:inline">
               {phase === 'PAUSED' ? 'Resume' : 'Pause'}
@@ -261,9 +261,9 @@ export function TopHud({
             aria-label="Open settings"
             title="Settings"
             disabled={phase === 'TITLE'}
-            className="inline-flex items-center justify-center gap-1.5 min-w-[32px] sm:min-w-[36px] h-7 sm:h-8 px-2 lg:px-2.5 rounded-md bg-[#232D3A] hover:bg-[#2E3A4A] active:bg-[#1B232D] border border-[#3C4A5C] text-slate-100 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-45 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400"
+            className="inline-flex items-center justify-center gap-1.5 min-w-[36px] h-8 sm:h-9 px-2 lg:px-2.5 rounded-md bg-[#232D3A] hover:bg-[#2E3A4A] active:bg-[#1B232D] border border-[#3C4A5C] text-slate-100 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-45 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400"
           >
-            <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-300 shrink-0" />
+            <Settings className="w-4 h-4 text-amber-300 shrink-0" />
             <span className="hidden lg:inline">Settings</span>
           </button>
         </div>

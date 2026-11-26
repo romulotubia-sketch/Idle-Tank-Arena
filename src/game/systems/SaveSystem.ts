@@ -1,4 +1,5 @@
 import { AutoForgeSystem } from './AutoForgeSystem';
+import { SkillSystem } from './SkillSystem';
 import { SkillUpgradeSystem } from './SkillUpgradeSystem';
 import { playgamaBridge } from '../../platform/playgamaBridge';
 import {
@@ -281,6 +282,9 @@ export class SaveSystem {
     const sanitizedSkillSlots = SkillUpgradeSystem.sanitizeSavedSkillSlots(
       parsed.skillSlots
     );
+    const sanitizedSkillLevels = SkillSystem.sanitizeSavedSkillLevels(
+      parsed.skillLevels
+    );
     const sanitizedPendingSkills = SkillUpgradeSystem.sanitizePendingSkills(
       parsed.pendingSkills
     );
@@ -353,6 +357,7 @@ export class SaveSystem {
       forge: sanitizedForge as SavePayload['forge'],
       skillCollection: sanitizedCollection as SavePayload['skillCollection'],
       skillSlots: sanitizedSkillSlots,
+      skillLevels: sanitizedSkillLevels,
       pendingSkills:
         sanitizedPendingSkills.length > 0 ? sanitizedPendingSkills : undefined,
       autoUpgrade: sanitizedAutoUpgrade,
@@ -369,45 +374,117 @@ export class SaveSystem {
     };
   }
 
-  async loadWithReport(): Promise<SaveLoadReport> {
-    const primaryRaw = await playgamaBridge.loadStorage(SAVE_STORAGE_KEY);
+  private resolveCandidate(
+    primaryRaw: string | null,
+    backupRaw: string | null
+  ): {
+    payload: SavePayload | null;
+    fromBackup: boolean;
+    hasAnyRawData: boolean;
+  } {
     const primaryValid = this.validateAndParse(primaryRaw);
-
     if (primaryValid) {
+      return { payload: primaryValid, fromBackup: false, hasAnyRawData: true };
+    }
+    const backupValid = this.validateAndParse(backupRaw);
+    if (backupValid) {
+      return { payload: backupValid, fromBackup: true, hasAnyRawData: true };
+    }
+    const hasAnyRawData =
+      (typeof primaryRaw === 'string' && primaryRaw.trim().length > 0) ||
+      (typeof backupRaw === 'string' && backupRaw.trim().length > 0);
+    return { payload: null, fromBackup: false, hasAnyRawData };
+  }
+
+  private selectPreferredSave(
+    platformSave: SavePayload | null,
+    localSave: SavePayload | null
+  ): { chosen: SavePayload | null; source: 'platform' | 'local' | 'none' } {
+    if (platformSave && !localSave) {
+      return { chosen: platformSave, source: 'platform' };
+    }
+    if (!platformSave && localSave) {
+      return { chosen: localSave, source: 'local' };
+    }
+    if (!platformSave || !localSave) {
+      return { chosen: null, source: 'none' };
+    }
+
+    // Both exist: pick whichever represents newer / further progression so valid local
+    // saves are never overwritten by a stale or empty starter platform save.
+    const platWave = Math.max(platformSave.wave.highestWave, platformSave.wave.currentWave);
+    const localWave = Math.max(localSave.wave.highestWave, localSave.wave.currentWave);
+
+    if (localSave.savedAt > platformSave.savedAt + 1000 && localWave >= platWave) {
+      return { chosen: localSave, source: 'local' };
+    }
+    if (platWave > localWave && platformSave.savedAt >= localSave.savedAt - 5000) {
+      return { chosen: platformSave, source: 'platform' };
+    }
+    if (localWave > platWave && localSave.savedAt >= platformSave.savedAt - 5000) {
+      return { chosen: localSave, source: 'local' };
+    }
+    return platformSave.savedAt >= localSave.savedAt
+      ? { chosen: platformSave, source: 'platform' }
+      : { chosen: localSave, source: 'local' };
+  }
+
+  async loadWithReport(): Promise<SaveLoadReport> {
+    const loaded = await playgamaBridge.loadStorageEntries([
+      SAVE_STORAGE_KEY,
+      SAVE_BACKUP_STORAGE_KEY,
+    ]);
+
+    const platformCandidate = this.resolveCandidate(
+      loaded.platform[SAVE_STORAGE_KEY],
+      loaded.platform[SAVE_BACKUP_STORAGE_KEY]
+    );
+    const localCandidate = this.resolveCandidate(
+      loaded.local[SAVE_STORAGE_KEY],
+      loaded.local[SAVE_BACKUP_STORAGE_KEY]
+    );
+
+    const { chosen, source } = this.selectPreferredSave(
+      platformCandidate.payload,
+      localCandidate.payload
+    );
+
+    if (chosen) {
       this.protectedCorruptState = false;
+      const usedBackup =
+        source === 'platform'
+          ? platformCandidate.fromBackup
+          : localCandidate.fromBackup;
+
+      // Sync chosen save across primary + backup and bridge storage if needed
+      if (usedBackup || (loaded.usedPlatform && !platformCandidate.payload)) {
+        const serialized = JSON.stringify(chosen);
+        await playgamaBridge.saveStorageEntries({
+          [SAVE_STORAGE_KEY]: serialized,
+          [SAVE_BACKUP_STORAGE_KEY]: serialized,
+        });
+      }
+
+      if (usedBackup) {
+        return {
+          status: 'recovered_from_backup',
+          payload: chosen,
+          notice: {
+            kind: 'recovered_from_backup',
+            message:
+              'Primary save data was incomplete and has been restored from your backup save.',
+          },
+        };
+      }
+
       return {
         status: 'ok',
-        payload: primaryValid,
+        payload: chosen,
         notice: null,
       };
     }
 
-    const backupRaw = await playgamaBridge.loadStorage(SAVE_BACKUP_STORAGE_KEY);
-    const backupValid = this.validateAndParse(backupRaw);
-
-    if (backupValid) {
-      this.protectedCorruptState = false;
-      // Repair primary save with verified backup data
-      await playgamaBridge.saveStorage(
-        SAVE_STORAGE_KEY,
-        JSON.stringify(backupValid)
-      );
-      return {
-        status: 'recovered_from_backup',
-        payload: backupValid,
-        notice: {
-          kind: 'recovered_from_backup',
-          message:
-            'Primary save data was incomplete and has been restored from your backup save.',
-        },
-      };
-    }
-
-    const hasAnyRawData =
-      (typeof primaryRaw === 'string' && primaryRaw.trim().length > 0) ||
-      (typeof backupRaw === 'string' && backupRaw.trim().length > 0);
-
-    if (hasAnyRawData) {
+    if (platformCandidate.hasAnyRawData || localCandidate.hasAnyRawData) {
       this.protectedCorruptState = true;
       return {
         status: 'corrupt_unrecoverable',
@@ -464,8 +541,10 @@ export class SaveSystem {
       this.protectedCorruptState = false;
     }
 
-    await playgamaBridge.saveStorage(SAVE_STORAGE_KEY, serialized);
-    await playgamaBridge.saveStorage(SAVE_BACKUP_STORAGE_KEY, serialized);
+    await playgamaBridge.saveStorageEntries({
+      [SAVE_STORAGE_KEY]: serialized,
+      [SAVE_BACKUP_STORAGE_KEY]: serialized,
+    });
     return true;
   }
 }

@@ -1,6 +1,7 @@
 import { GAME_BALANCE } from '../balanceConfig';
 import {
   ALL_SKILL_IDS,
+  MAX_SKILL_LEVEL,
   SKILL_RARITY_ORDER,
   SKILL_SLOT_COUNT,
   SKILL_SUMMON_RARITY_WEIGHTS,
@@ -232,7 +233,10 @@ export class SkillSummonSystem {
     // Case B1: Not currently equipped, and a vacant slot is available
     const vacantIndex = skills.findFirstVacantSlotIndex();
     if (vacantIndex !== -1) {
-      skills.assignToVacantSlot(vacantIndex, chosenSkillId, 1, collection);
+      const remembered = skills.getLearnedSkillLevel(chosenSkillId);
+      const startLevel =
+        remembered >= 1 ? Math.min(MAX_SKILL_LEVEL, remembered + 1) : 1;
+      skills.assignToVacantSlot(vacantIndex, chosenSkillId, startLevel, collection);
       const autoUpgrades =
         upgradeSystem && upgradeSystem.isAutoUpgradeEnabled()
           ? upgradeSystem.runAutoUpgradePass(skills, collection)

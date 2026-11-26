@@ -1,0 +1,18 @@
+{
+  "advertisement": {
+    "minimumDelayBetweenInterstitial": 60,
+    "interstitial": {
+      "placements": [
+        { "id": "title_return" },
+        { "id": "battle_restart" }
+      ]
+    },
+    "rewarded": {
+      "placements": [
+        { "id": "offline_reward_bonus" },
+        { "id": "optional_coin_bonus" },
+        { "id": "temporary_boost" }
+      ]
+    }
+  }
+}

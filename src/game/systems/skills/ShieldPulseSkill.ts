@@ -31,6 +31,7 @@ export class ShieldPulseSkill implements CombatSkillModule {
     const damageMult = col?.damageMultiplier ?? 1;
     const shieldMult = col?.speedMultiplier ?? 1;
 
+    if (ctx.enemySystem.countAliveEnemies() === 0) return false;
     const enemies = ctx.enemySystem.getActiveEnemies();
     const nearby = findEnemiesInRange(
       ctx.tank.position.x,
@@ -41,7 +42,6 @@ export class ShieldPulseSkill implements CombatSkillModule {
     if (nearby.length === 0 && (ctx.tank.shieldHp ?? 0) > 0) {
       return false;
     }
-    if (enemies.length === 0) return false;
 
     const shieldVal = Math.max(10, Math.round(spec.shieldAmount * shieldMult));
     ctx.grantShield?.(shieldVal, spec.duration);

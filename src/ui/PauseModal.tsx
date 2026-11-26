@@ -2,10 +2,13 @@ import {
   Crosshair,
   Gamepad2,
   Hammer,
+  Maximize2,
+  Minimize2,
   Monitor,
   Music,
   Pause,
   Play,
+  PlayCircle,
   RotateCcw,
   Settings,
   ShieldCheck,
@@ -17,6 +20,7 @@ import {
   ForgeStatus,
   GameSettingsState,
   GraphicsQuality,
+  MonetizationOfferId,
   MonetizationSnapshot,
 } from '../game/types';
 import { BattlefieldPanel } from './components/BattlefieldPanel';
@@ -31,6 +35,9 @@ interface PauseModalProps {
   autoForgeEnabled: boolean;
   settings: GameSettingsState;
   monetization?: MonetizationSnapshot;
+  fullscreenSupported?: boolean;
+  isFullscreen?: boolean;
+  adFeedback?: string | null;
   onChangeMode: (mode: PauseModalMode) => void;
   onResume: () => void;
   onToggleSound: () => void;
@@ -39,6 +46,10 @@ interface PauseModalProps {
   onChangeMusicVolume: (volume: number) => void;
   onChangeGraphicsQuality: (quality: GraphicsQuality) => void;
   onToggleRangeRing: () => void;
+  onToggleFullscreen?: () => void;
+  onRequestRewardedOffer?: (
+    offerId: Exclude<MonetizationOfferId, 'offline_reward_bonus'>
+  ) => void;
   onReturnToTitle: () => void;
 }
 
@@ -50,6 +61,9 @@ export function PauseModal({
   autoForgeEnabled,
   settings,
   monetization,
+  fullscreenSupported = false,
+  isFullscreen = false,
+  adFeedback = null,
   onChangeMode,
   onResume,
   onToggleSound,
@@ -58,6 +72,8 @@ export function PauseModal({
   onChangeMusicVolume,
   onChangeGraphicsQuality,
   onToggleRangeRing,
+  onToggleFullscreen,
+  onRequestRewardedOffer,
   onReturnToTitle,
 }: PauseModalProps) {
   const sfxPct = Math.round(settings.soundVolume * 100);
@@ -340,6 +356,28 @@ export function PauseModal({
                     {settings.showRangeRing ? 'Visible' : 'Hidden'}
                   </span>
                 </button>
+
+                {fullscreenSupported && onToggleFullscreen && (
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isFullscreen}
+                    onClick={onToggleFullscreen}
+                    className="flex items-center justify-between w-full min-h-[38px] px-2.5 py-1.5 rounded-lg bg-[#151C25] hover:bg-[#1B2430] border border-white/8 text-xs text-slate-200 transition-colors cursor-pointer"
+                  >
+                    <span className="inline-flex items-center gap-1.5 font-semibold">
+                      {isFullscreen ? (
+                        <Minimize2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      ) : (
+                        <Maximize2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      )}
+                      <span>Display Mode</span>
+                    </span>
+                    <span className="font-mono-tabular text-[11px] font-bold text-sky-300">
+                      {isFullscreen ? 'Fullscreen' : 'Windowed'}
+                    </span>
+                  </button>
+                )}
               </section>
             </div>
 
@@ -389,45 +427,123 @@ export function PauseModal({
                 </div>
 
                 {monetization && (
-                  <div className="rounded-lg bg-[#151C25] border border-white/8 p-2.5 flex flex-col gap-1.5">
+                  <div className="rounded-lg bg-[#151C25] border border-white/8 p-2.5 flex flex-col gap-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-bold text-slate-100">
                         Optional Bonuses ({monetization.providerName})
                       </span>
                       <span className="px-1.5 py-0.5 rounded bg-[#10151B] border border-[#334155] text-[10px] font-semibold text-slate-400 whitespace-nowrap">
-                        {monetization.sdkConnected ? 'Ready' : 'Coming Soon'}
+                        {monetization.isAdPlaying
+                          ? 'Ad Playing...'
+                          : monetization.sdkConnected
+                            ? 'Ready'
+                            : 'Ad Unavailable'}
                       </span>
                     </div>
-                    <div className="grid grid-cols-1 gap-1 text-[10px] text-slate-400 font-mono-tabular">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-300">
-                          {monetization.offers.offline_reward_bonus.label}
-                        </span>
-                        <span>
-                          {monetization.offers.offline_reward_bonus.dailyRemaining}/
-                          {monetization.offers.offline_reward_bonus.dailyLimit} daily
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-300">
-                          {monetization.offers.optional_coin_bonus.label} (+
-                          {monetization.optionalCoinBonusPreview})
-                        </span>
-                        <span>
-                          {monetization.offers.optional_coin_bonus.dailyRemaining}/
-                          {monetization.offers.optional_coin_bonus.dailyLimit} daily
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-slate-300">
-                          {monetization.offers.temporary_boost.label}
-                        </span>
-                        <span>
-                          {monetization.offers.temporary_boost.dailyRemaining}/
-                          {monetization.offers.temporary_boost.dailyLimit} daily
-                        </span>
-                      </div>
+
+                    <div className="flex flex-col gap-1.5 text-[11px]">
+                      {/* Optional Supply Drop Bonus */}
+                      {monetization.offers.optional_coin_bonus.enabled && (
+                        <div className="flex items-center justify-between gap-2 rounded-md bg-[#10151B] border border-white/6 px-2 py-1.5">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-200 truncate">
+                              {monetization.offers.optional_coin_bonus.label} (+
+                              {monetization.optionalCoinBonusPreview} Coins)
+                            </div>
+                            <div className="font-mono-tabular text-[10px] text-slate-400">
+                              {
+                                monetization.offers.optional_coin_bonus
+                                  .dailyRemaining
+                              }
+                              /
+                              {
+                                monetization.offers.optional_coin_bonus
+                                  .dailyLimit
+                              }{' '}
+                              daily
+                              {monetization.offers.optional_coin_bonus
+                                .cooldownRemainingSec > 0
+                                ? ` · ${monetization.offers.optional_coin_bonus.cooldownRemainingSec}s cd`
+                                : ''}
+                            </div>
+                          </div>
+                          {monetization.sdkConnected &&
+                          onRequestRewardedOffer ? (
+                            <button
+                              type="button"
+                              disabled={
+                                !monetization.offers.optional_coin_bonus
+                                  .canClaim || monetization.isAdPlaying
+                              }
+                              onClick={() =>
+                                onRequestRewardedOffer('optional_coin_bonus')
+                              }
+                              className="inline-flex items-center gap-1 h-7 px-2 rounded bg-amber-500 hover:bg-amber-400 disabled:opacity-45 disabled:cursor-not-allowed text-slate-950 font-bold text-[10px] whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              <PlayCircle className="w-3 h-3 shrink-0" />
+                              <span>Watch Ad</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+                              Offline
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Optional Temporary Boost */}
+                      {monetization.offers.temporary_boost.enabled && (
+                        <div className="flex items-center justify-between gap-2 rounded-md bg-[#10151B] border border-white/6 px-2 py-1.5">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-200 truncate">
+                              {monetization.offers.temporary_boost.label}
+                            </div>
+                            <div className="font-mono-tabular text-[10px] text-slate-400">
+                              {monetization.offers.temporary_boost.shortDesc} ·{' '}
+                              {
+                                monetization.offers.temporary_boost
+                                  .dailyRemaining
+                              }
+                              /{monetization.offers.temporary_boost.dailyLimit}
+                              {monetization.offers.temporary_boost
+                                .cooldownRemainingSec > 0
+                                ? ` · ${monetization.offers.temporary_boost.cooldownRemainingSec}s cd`
+                                : ''}
+                            </div>
+                          </div>
+                          {monetization.sdkConnected &&
+                          onRequestRewardedOffer ? (
+                            <button
+                              type="button"
+                              disabled={
+                                !monetization.offers.temporary_boost.canClaim ||
+                                monetization.isAdPlaying
+                              }
+                              onClick={() =>
+                                onRequestRewardedOffer('temporary_boost')
+                              }
+                              className="inline-flex items-center gap-1 h-7 px-2 rounded bg-sky-500 hover:bg-sky-400 disabled:opacity-45 disabled:cursor-not-allowed text-slate-950 font-bold text-[10px] whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              <PlayCircle className="w-3 h-3 shrink-0" />
+                              <span>Watch Ad</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+                              Offline
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
+
+                    {adFeedback && (
+                      <div
+                        role="status"
+                        className="text-[10px] text-amber-200 bg-[#10151B] border border-amber-500/35 rounded px-2 py-1"
+                      >
+                        {adFeedback}
+                      </div>
+                    )}
                   </div>
                 )}
 

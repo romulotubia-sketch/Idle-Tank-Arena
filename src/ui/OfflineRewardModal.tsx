@@ -1,17 +1,23 @@
-import { Clock, Coins, Sparkles } from 'lucide-react';
+import { Clock, Coins, PlayCircle, Sparkles } from 'lucide-react';
 import { OfflineProgressSystem } from '../game/systems/OfflineProgressSystem';
 import { OfflineBonusPreview, OfflineRewardSummary } from '../game/types';
 
 interface OfflineRewardModalProps {
   reward: OfflineRewardSummary;
   offlineBonusPreview?: OfflineBonusPreview | null;
+  isAdBusy?: boolean;
+  adFeedback?: string | null;
   onClaim: () => void;
+  onWatchBonusAd?: () => void;
 }
 
 export function OfflineRewardModal({
   reward,
   offlineBonusPreview,
+  isAdBusy = false,
+  adFeedback = null,
   onClaim,
+  onWatchBonusAd,
 }: OfflineRewardModalProps) {
   const durationLabel = OfflineProgressSystem.formatDuration(
     reward.effectiveSeconds
@@ -20,6 +26,12 @@ export function OfflineRewardModal({
   const showPreparedBonus =
     Boolean(offlineBonusPreview?.enabled) &&
     (offlineBonusPreview?.bonusCoins ?? 0) > 0;
+  const canWatchBonusAd =
+    Boolean(onWatchBonusAd) &&
+    Boolean(offlineBonusPreview?.sdkConnected) &&
+    (offlineBonusPreview?.dailyRemaining ?? 0) > 0 &&
+    !reward.claimed &&
+    !isAdBusy;
 
   return (
     <div
@@ -88,24 +100,50 @@ export function OfflineRewardModal({
                 <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-200">
                   <Sparkles className="w-3 h-3 text-sky-400 shrink-0" />
                   <span>
-                    Optional Playgama Bonus (+{offlineBonusPreview.bonusPct}%)
+                    Optional Bonus (+{offlineBonusPreview.bonusPct}%)
                   </span>
                 </div>
                 <div className="font-mono-tabular text-[11px] text-slate-400">
                   +{offlineBonusPreview.bonusCoins.toLocaleString()} extra Coins
+                  {offlineBonusPreview.sdkConnected
+                    ? ` · ${offlineBonusPreview.dailyRemaining}/${offlineBonusPreview.dailyLimit} left`
+                    : ''}
                 </div>
               </div>
-              <span className="px-1.5 py-0.5 rounded bg-[#161E28] border border-[#334155] text-[10px] font-semibold text-slate-400 whitespace-nowrap shrink-0">
-                {offlineBonusPreview.sdkConnected
-                  ? `${offlineBonusPreview.dailyRemaining}/${offlineBonusPreview.dailyLimit} left`
-                  : 'Coming Soon'}
-              </span>
+
+              {offlineBonusPreview.sdkConnected &&
+              offlineBonusPreview.dailyRemaining > 0 ? (
+                <button
+                  type="button"
+                  disabled={!canWatchBonusAd}
+                  onClick={onWatchBonusAd}
+                  className="inline-flex items-center gap-1 min-h-[34px] px-2.5 py-1 rounded-md bg-sky-500 hover:bg-sky-400 active:bg-sky-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold text-[11px] whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-sky-300"
+                >
+                  <PlayCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{isAdBusy ? 'Loading Ad...' : 'Watch Ad'}</span>
+                </button>
+              ) : (
+                <span className="px-1.5 py-0.5 rounded bg-[#161E28] border border-[#334155] text-[10px] font-semibold text-slate-400 whitespace-nowrap shrink-0">
+                  {offlineBonusPreview.sdkConnected
+                    ? 'Daily Limit'
+                    : 'Ad Unavailable'}
+                </span>
+              )}
+            </div>
+          )}
+
+          {adFeedback && (
+            <div
+              role="status"
+              className="text-[11px] text-center text-amber-200 bg-[#18202A] border border-amber-500/35 rounded-md px-2.5 py-1.5"
+            >
+              {adFeedback}
             </div>
           )}
 
           <button
             type="button"
-            disabled={reward.claimed}
+            disabled={reward.claimed || isAdBusy}
             onClick={onClaim}
             className="w-full min-h-[44px] px-5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 active:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold text-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
           >

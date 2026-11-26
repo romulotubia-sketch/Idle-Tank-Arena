@@ -328,6 +328,10 @@ export class SkillUpgradeSystem {
     return removeCount;
   }
 
+  consumePendingForDeployment(skillId: SkillId): boolean {
+    return this.consumePendingCopy(skillId, 1) > 0;
+  }
+
   processDirectDuplicate(
     skillId: SkillId,
     skills: SkillSystem,
@@ -511,12 +515,26 @@ export class SkillUpgradeSystem {
       return { success: false, reason: 'already_equipped_elsewhere' };
     }
 
-    const replaceRes = skills.replaceSlotSkill(slotIndex, skillId, 1, collection);
+    const rememberedLevel = skills.getLearnedSkillLevel(skillId);
+    const shouldConsumeCopy = rememberedLevel < MAX_SKILL_LEVEL;
+    const targetLevel =
+      rememberedLevel >= 1
+        ? Math.min(MAX_SKILL_LEVEL, rememberedLevel + (shouldConsumeCopy ? 1 : 0))
+        : 1;
+
+    const replaceRes = skills.replaceSlotSkill(
+      slotIndex,
+      skillId,
+      targetLevel,
+      collection
+    );
     if (!replaceRes.success) {
       return { success: false, reason: 'invalid_slot' };
     }
 
-    this.consumePendingCopy(skillId, 1);
+    if (shouldConsumeCopy) {
+      this.consumePendingCopy(skillId, 1);
+    }
 
     const autoUpgrades = this.enabled
       ? this.runAutoUpgradePass(skills, collection)

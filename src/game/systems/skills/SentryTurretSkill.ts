@@ -30,8 +30,7 @@ export class SentryTurretSkill implements CombatSkillModule {
     const damageMult = col?.damageMultiplier ?? 1;
     const bonusRange = col?.bonusRange ?? 0;
 
-    const enemies = ctx.enemySystem.getActiveEnemies();
-    if (enemies.length === 0) return false;
+    if (ctx.enemySystem.countAliveEnemies() === 0) return false;
 
     const angle = Math.random() * Math.PI * 2;
     const dist = 56 + Math.random() * 24;

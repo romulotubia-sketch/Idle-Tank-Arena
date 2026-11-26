@@ -32,7 +32,7 @@ export class DroneSquadronSkill implements CombatSkillModule {
     const damageMult = col?.damageMultiplier ?? 1;
     const fireIntervalMult = col?.cooldownMultiplier ?? 1;
 
-    if (ctx.enemySystem.getActiveEnemies().length === 0) return false;
+    if (ctx.enemySystem.countAliveEnemies() === 0) return false;
 
     ctx.combat.deployDroneSquadron(
       ctx.tank.position.x,

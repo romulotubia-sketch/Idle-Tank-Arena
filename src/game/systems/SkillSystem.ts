@@ -9,9 +9,32 @@ import { SkillCollectionSystem } from './SkillCollectionSystem';
 import { SkillExecutionContext } from './skills/BaseSkill';
 import { skillRegistry } from './skills/SkillRegistry';
 
+const VALID_SKILL_ID_SET = new Set<SkillId>(ALL_SKILL_IDS);
+
 export class SkillSystem {
   private readonly catalog = new Map<SkillId, SkillDefinition>();
   private slots: SkillSlot[];
+  private learnedSkillLevels = new Map<SkillId, number>();
+
+  static sanitizeSavedSkillLevels(
+    raw: unknown
+  ): Partial<Record<SkillId, number>> | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return undefined;
+    }
+    const obj = raw as Record<string, unknown>;
+    const clean: Partial<Record<SkillId, number>> = {};
+    let hasAny = false;
+    for (let i = 0; i < ALL_SKILL_IDS.length; i++) {
+      const id = ALL_SKILL_IDS[i];
+      const val = obj[id];
+      if (typeof val === 'number' && Number.isFinite(val) && val >= 1) {
+        clean[id] = Math.max(1, Math.min(MAX_SKILL_LEVEL, Math.floor(val)));
+        hasAny = true;
+      }
+    }
+    return hasAny ? clean : undefined;
+  }
 
   constructor(slotCount: number = SKILL_SLOT_COUNT) {
     for (const def of skillRegistry.getAllDefinitions()) {
@@ -71,6 +94,38 @@ export class SkillSystem {
     return this.findFirstVacantSlotIndex() !== -1;
   }
 
+  private recordLearnedSkillLevel(skillId: SkillId, level: number): void {
+    const clean = Math.max(1, Math.min(MAX_SKILL_LEVEL, Math.floor(level)));
+    const prev = this.learnedSkillLevels.get(skillId) ?? 0;
+    if (clean > prev) {
+      this.learnedSkillLevels.set(skillId, clean);
+    }
+  }
+
+  hasLearnedSkillLevel(skillId: SkillId): boolean {
+    return (this.learnedSkillLevels.get(skillId) ?? 0) >= 1;
+  }
+
+  getLearnedSkillLevel(skillId: SkillId): number {
+    return this.learnedSkillLevels.get(skillId) ?? 0;
+  }
+
+  exportLearnedSkillLevels(): Partial<Record<SkillId, number>> {
+    const out: Partial<Record<SkillId, number>> = {};
+    this.learnedSkillLevels.forEach((lvl, id) => {
+      if (lvl >= 1) {
+        out[id] = lvl;
+      }
+    });
+    for (let i = 0; i < this.slots.length; i++) {
+      const slot = this.slots[i];
+      if (slot.skillId && slot.level >= 1) {
+        out[slot.skillId] = Math.max(out[slot.skillId] ?? 0, slot.level);
+      }
+    }
+    return out;
+  }
+
   assignToVacantSlot(
     slotIndex: number,
     skillId: SkillId,
@@ -92,6 +147,7 @@ export class SkillSystem {
     slot.tier = clampedLevel;
     slot.cooldownTotal = cd;
     slot.cooldownRemaining = Math.min(0.2, cd);
+    this.recordLearnedSkillLevel(skillId, clampedLevel);
     return true;
   }
 
@@ -120,6 +176,7 @@ export class SkillSystem {
     slot.cooldownTotal = newCooldownTotal;
     // Preserve remaining cooldown progress capped to the faster upgraded cooldown
     slot.cooldownRemaining = Math.min(slot.cooldownRemaining, newCooldownTotal);
+    this.recordLearnedSkillLevel(slot.skillId, clampedLevel);
     return true;
   }
 
@@ -145,6 +202,10 @@ export class SkillSystem {
 
     const previousSkillId = slot.skillId;
     const previousLevel = slot.level;
+    if (previousSkillId && previousLevel > 0) {
+      this.recordLearnedSkillLevel(previousSkillId, previousLevel);
+    }
+
     const clampedLevel = Math.max(1, Math.min(MAX_SKILL_LEVEL, Math.floor(level)));
     const cd = module.getCooldown(
       clampedLevel,
@@ -156,6 +217,7 @@ export class SkillSystem {
     slot.tier = clampedLevel;
     slot.cooldownTotal = cd;
     slot.cooldownRemaining = Math.min(0.2, cd);
+    this.recordLearnedSkillLevel(skillId, clampedLevel);
     return { success: true, previousSkillId, previousLevel };
   }
 
@@ -184,9 +246,12 @@ export class SkillSystem {
     slot.cooldownTotal = 0;
   }
 
-  resetToEmpty(): void {
+  resetToEmpty(options?: { clearLearnedLevels?: boolean }): void {
     for (let i = 0; i < this.slots.length; i++) {
       this.clearSlot(i);
+    }
+    if (options?.clearLearnedLevels) {
+      this.learnedSkillLevels.clear();
     }
   }
 
@@ -213,12 +278,21 @@ export class SkillSystem {
 
   loadState(
     saved?: SavedSkillSlot[],
-    collection?: SkillCollectionSystem
+    collection?: SkillCollectionSystem,
+    savedLearnedLevels?: Partial<Record<SkillId, number>>
   ): void {
-    this.resetToEmpty();
+    this.resetToEmpty({ clearLearnedLevels: true });
+    if (savedLearnedLevels) {
+      for (let i = 0; i < ALL_SKILL_IDS.length; i++) {
+        const id = ALL_SKILL_IDS[i];
+        const rawLvl = savedLearnedLevels[id];
+        if (typeof rawLvl === 'number' && Number.isFinite(rawLvl) && rawLvl >= 1) {
+          this.recordLearnedSkillLevel(id, rawLvl);
+        }
+      }
+    }
     if (!Array.isArray(saved)) return;
 
-    const validIds = new Set<SkillId>(ALL_SKILL_IDS);
     const seenSkills = new Set<SkillId>();
 
     for (let i = 0; i < saved.length; i++) {
@@ -227,7 +301,7 @@ export class SkillSystem {
         continue;
       }
       if (raw.index < 0 || raw.index >= this.slots.length) continue;
-      if (!raw.skillId || !validIds.has(raw.skillId)) continue;
+      if (!raw.skillId || !VALID_SKILL_ID_SET.has(raw.skillId)) continue;
       if (seenSkills.has(raw.skillId)) continue;
 
       const cleanLevel =
@@ -244,6 +318,7 @@ export class SkillSystem {
       slot.skillId = raw.skillId;
       slot.level = cleanLevel;
       slot.tier = cleanLevel;
+      this.recordLearnedSkillLevel(raw.skillId, cleanLevel);
       const cd = module.getCooldown(
         cleanLevel,
         collection?.getComputedBonuses(raw.skillId)

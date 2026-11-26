@@ -722,6 +722,15 @@ export type MonetizationOfferId =
   | 'optional_coin_bonus'
   | 'temporary_boost';
 
+export type InterstitialTransitionId = 'return_to_title' | 'battle_restart';
+
+export interface InterstitialStatusSnapshot {
+  enabled: boolean;
+  supported: boolean;
+  cooldownRemainingSec: number;
+  minIntervalSec: number;
+}
+
 export interface ActiveTemporaryBoostState {
   active: boolean;
   remainingSec: number;
@@ -757,11 +766,13 @@ export interface MonetizationOfferStatus {
 export interface MonetizationSnapshot {
   providerName: 'Playgama';
   sdkConnected: boolean;
+  isAdPlaying: boolean;
   dayKey: string;
   activeBoost: ActiveTemporaryBoostState;
   optionalCoinBonusPreview: number;
   offlineBonusPreview: OfflineBonusPreview | null;
   offers: Record<MonetizationOfferId, MonetizationOfferStatus>;
+  interstitial: InterstitialStatusSnapshot;
 }
 
 export interface SavedMonetizationState {
@@ -782,6 +793,7 @@ export interface SavePayload {
   forge?: SavedForgeState;
   skillCollection?: SavedSkillCollectionState;
   skillSlots?: SavedSkillSlot[];
+  skillLevels?: Partial<Record<SkillId, number>>;
   pendingSkills?: PendingSkillEntry[];
   autoUpgrade?: SavedAutoUpgradeState;
   monetization?: SavedMonetizationState;
@@ -829,6 +841,7 @@ export interface WaveHudEvent {
 }
 
 export interface GameHudSnapshot {
+  isInitializing: boolean;
   phase: GamePhase;
   wave: WaveState;
   boss: BossHudState | null;
@@ -839,6 +852,7 @@ export interface GameHudSnapshot {
   battle: BattleSummary;
   upgrades: UpgradeEntry[];
   skillSlots: SkillSlot[];
+  skillBattleLevels: Partial<Record<SkillId, number>>;
   pendingSkills: PendingSkillEntry[];
   pendingSkillCount: number;
   autoUpgrade: AutoUpgradeState;

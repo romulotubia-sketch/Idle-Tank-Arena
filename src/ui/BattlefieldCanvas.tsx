@@ -114,13 +114,21 @@ export function BattlefieldCanvas({
 
     engine.attachCanvas(canvas);
 
-    const observer = new ResizeObserver(() => {
+    const handleViewportResize = () => {
       engine.handleResize(canvas);
-    });
+    };
+
+    const observer = new ResizeObserver(handleViewportResize);
     observer.observe(container);
+    window.addEventListener('resize', handleViewportResize);
+    window.addEventListener('orientationchange', handleViewportResize);
+    document.addEventListener('fullscreenchange', handleViewportResize);
 
     return () => {
       observer.disconnect();
+      window.removeEventListener('resize', handleViewportResize);
+      window.removeEventListener('orientationchange', handleViewportResize);
+      document.removeEventListener('fullscreenchange', handleViewportResize);
       engine.detachCanvas();
     };
   }, [engine]);

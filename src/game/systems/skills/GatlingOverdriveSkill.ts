@@ -32,8 +32,8 @@ export class GatlingOverdriveSkill implements CombatSkillModule {
     const col = ctx.getCollectionBonuses?.(this.definition.id);
     const damageMult = col?.damageMultiplier ?? 1;
 
+    if (ctx.enemySystem.countAliveEnemies() === 0) return false;
     const enemies = ctx.enemySystem.getActiveEnemies();
-    if (enemies.length === 0) return false;
 
     const target = findNearestEnemyInRange(
       ctx.tank.position.x,

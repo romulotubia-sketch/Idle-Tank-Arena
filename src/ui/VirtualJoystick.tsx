@@ -61,11 +61,13 @@ export function VirtualJoystick({ onMove }: VirtualJoystickProps) {
     window.addEventListener('pointermove', onWinMove);
     window.addEventListener('pointerup', onWinUp);
     window.addEventListener('pointercancel', onWinUp);
+    window.addEventListener('blur', resetKnob);
 
     return () => {
       window.removeEventListener('pointermove', onWinMove);
       window.removeEventListener('pointerup', onWinUp);
       window.removeEventListener('pointercancel', onWinUp);
+      window.removeEventListener('blur', resetKnob);
     };
   }, [isDragging, resetKnob, updateFromClientPos]);
 

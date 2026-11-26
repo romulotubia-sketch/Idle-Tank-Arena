@@ -1,5 +1,5 @@
 import { BookOpen, Hammer, Package, SlidersHorizontal } from 'lucide-react';
-import { skillRegistry } from '../../game/systems/skills/SkillRegistry';
+import { ALL_SKILL_IDS } from '../../game/constants';
 import { ForgeStatus } from '../../game/types';
 
 export type ActivePanelId =
@@ -55,7 +55,7 @@ export function BattlefieldNav({
       id: 'collection',
       label: 'Collection',
       ariaLabel: 'Open Skill Collection',
-      meta: `${unlockedSkillCount}/${skillRegistry.getAllDefinitions().length}`,
+      meta: `${unlockedSkillCount}/${ALL_SKILL_IDS.length}`,
       highlight: hasAffordableCollectionUpgrade,
       highlightTone: 'emerald',
       icon: <BookOpen className="w-4 h-4 text-emerald-400 shrink-0" />,

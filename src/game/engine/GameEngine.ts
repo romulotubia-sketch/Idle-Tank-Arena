@@ -68,6 +68,22 @@ import { Renderer } from './Renderer';
 
 type SnapshotListener = (snapshot: GameHudSnapshot) => void;
 
+export interface SwitchSkillSlotResult {
+  success: boolean;
+  reason?:
+    | 'not_active'
+    | 'invalid_slot'
+    | 'not_unlocked'
+    | 'already_in_slot'
+    | 'already_equipped_elsewhere';
+  slotIndex?: number;
+  skillId?: SkillId;
+  level?: number;
+  replacedSkillId?: SkillId | null;
+  replacedLevel?: number;
+  autoUpgrades?: DirectUpgradeStepResult[];
+}
+
 export class GameEngine {
   readonly battlefield = new BattlefieldSystem();
   readonly tank: TankSystem;
@@ -88,6 +104,8 @@ export class GameEngine {
 
   private readonly renderer: Renderer;
   private attachedCanvas: HTMLCanvasElement | null = null;
+  private isInitializing = true;
+  private sdkListenersAttached = false;
   private phase: GamePhase = 'TITLE';
   private showRangeRing = true;
   private soundEnabled = true;
@@ -96,6 +114,7 @@ export class GameEngine {
   private musicVolume = 0.4;
   private graphicsQuality: GraphicsQuality = 'high';
   private reducedMotion = false;
+  private totalGameplaySec = 0;
   private battleStats: BattleSummary = {
     enemiesDefeated: 0,
     elapsedSeconds: 0,
@@ -137,11 +156,44 @@ export class GameEngine {
     return this.renderer.getCamera();
   }
 
+  private attachPlatformListeners(): void {
+    if (this.sdkListenersAttached) return;
+    this.sdkListenersAttached = true;
+
+    soundEffects.setPlatformAudioEnabled(playgamaBridge.isAudioEnabled());
+
+    playgamaBridge.onAudioStateChange((audioEnabled) => {
+      soundEffects.setPlatformAudioEnabled(audioEnabled);
+    });
+
+    playgamaBridge.onPauseStateChange((paused) => {
+      if (paused && this.phase === 'ACTIVE') {
+        this.setPhase('PAUSED');
+      }
+    });
+
+    playgamaBridge.onAdStateChange((isPlaying) => {
+      soundEffects.setAdMuted(isPlaying);
+      if (isPlaying && this.phase === 'ACTIVE') {
+        this.setPhase('PAUSED');
+      } else {
+        this.emitSnapshot();
+      }
+    });
+  }
+
   async initialize(): Promise<void> {
-    await playgamaBridge.init();
-    await this.loadFromStorage();
-    playgamaBridge.notifyGameReady();
+    this.isInitializing = true;
     this.emitSnapshot();
+    try {
+      await playgamaBridge.init();
+      this.attachPlatformListeners();
+      await this.loadFromStorage();
+    } finally {
+      this.isInitializing = false;
+      playgamaBridge.notifyGameReady();
+      this.emitSnapshot();
+    }
   }
 
   async loadFromStorage(): Promise<void> {
@@ -156,7 +208,11 @@ export class GameEngine {
       this.equipment.loadState(saved.equipment);
       this.forge.loadState(saved.forge);
       this.skillCollection.loadState(saved.skillCollection);
-      this.skills.loadState(saved.skillSlots, this.skillCollection);
+      this.skills.loadState(
+        saved.skillSlots,
+        this.skillCollection,
+        saved.skillLevels
+      );
       this.skillUpgrade.loadState(saved.pendingSkills, saved.autoUpgrade);
       if (this.skillUpgrade.isAutoUpgradeEnabled()) {
         this.skillUpgrade.runAutoUpgradePass(this.skills, this.skillCollection);
@@ -270,6 +326,7 @@ export class GameEngine {
       : null;
 
     return {
+      isInitializing: this.isInitializing,
       phase: this.phase,
       wave: waveState,
       boss,
@@ -285,6 +342,7 @@ export class GameEngine {
       battle: { ...this.battleStats },
       upgrades: this.upgrades.getEntries(),
       skillSlots: this.skills.getSlots(),
+      skillBattleLevels: this.skills.exportLearnedSkillLevels(),
       pendingSkills: this.skillUpgrade.getPendingSkills(),
       pendingSkillCount: this.skillUpgrade.getPendingCount(),
       autoUpgrade: this.skillUpgrade.getState(),
@@ -355,6 +413,71 @@ export class GameEngine {
       this.emitSnapshot();
     }
     return result;
+  }
+
+  switchSkillSlot(
+    slotIndex: number,
+    skillId: SkillId
+  ): SwitchSkillSlotResult {
+    if (this.phase !== 'ACTIVE') {
+      return { success: false, reason: 'not_active' };
+    }
+
+    const slot = this.skills.getSlot(slotIndex);
+    if (!slot || !slot.unlocked) {
+      return { success: false, reason: 'invalid_slot' };
+    }
+
+    if (!this.skillCollection.isUnlocked(skillId)) {
+      return { success: false, reason: 'not_unlocked' };
+    }
+
+    if (slot.skillId === skillId) {
+      return { success: false, reason: 'already_in_slot' };
+    }
+
+    const existingIdx = this.skills.findSlotIndexBySkillId(skillId);
+    if (existingIdx !== -1 && existingIdx !== slotIndex) {
+      return { success: false, reason: 'already_equipped_elsewhere' };
+    }
+
+    const hadLearnedLevel = this.skills.hasLearnedSkillLevel(skillId);
+    const rememberedLevel = this.skills.getLearnedSkillLevel(skillId);
+
+    // If this skill was newly summoned while 6/6 slots were full and has not been
+    // deployed yet, consume its deployment copy so it enters at Lv.1 cleanly.
+    if (!hadLearnedLevel && this.skillUpgrade.getPendingCopies(skillId) > 0) {
+      this.skillUpgrade.consumePendingForDeployment(skillId);
+    }
+
+    const deployLevel = Math.max(1, rememberedLevel);
+    const replaceRes = this.skills.replaceSlotSkill(
+      slotIndex,
+      skillId,
+      deployLevel,
+      this.skillCollection
+    );
+    if (!replaceRes.success) {
+      return { success: false, reason: 'invalid_slot' };
+    }
+
+    const autoUpgrades = this.skillUpgrade.isAutoUpgradeEnabled()
+      ? this.skillUpgrade.runAutoUpgradePass(this.skills, this.skillCollection)
+      : [];
+
+    const finalSlot = this.skills.getSlot(slotIndex);
+    void this.persist();
+    this.emitSnapshot();
+
+    return {
+      success: true,
+      slotIndex,
+      skillId,
+      level: finalSlot?.level ?? deployLevel,
+      replacedSkillId: replaceRes.previousSkillId,
+      replacedLevel: replaceRes.previousLevel,
+      autoUpgrades,
+    };
   }
 
   applyPendingSkillUpgrade(skillId: SkillId): ApplyPendingUpgradeResult {
@@ -720,7 +843,7 @@ export class GameEngine {
     this.enemies.clear();
     this.combat.clear();
     if (options.resetWaveToOne) {
-      this.skills.resetToEmpty();
+      this.skills.resetToEmpty({ clearLearnedLevels: true });
       this.skillUpgrade.clearPendingSkills();
       this.waves.resetForNewRun();
     } else {
@@ -800,6 +923,7 @@ export class GameEngine {
     playgamaBridge.notifyGameplayStop();
     void this.persist();
     this.emitSnapshot();
+    void this.tryShowTransitionInterstitial('return_to_title');
   }
 
   beginBattleRecovery(): void {
@@ -887,6 +1011,111 @@ export class GameEngine {
     return this.monetization.tryRequestPreparedOffer(offerId, {
       baseOfflineCoins: this.pendingOfflineReward?.coinsEarned,
       wave: this.waves.getState().currentWave,
+    });
+  }
+
+  async requestRewardedOffer(
+    offerId: MonetizationOfferId
+  ): Promise<
+    MonetizationRewardGrantResult & { baseOfflineCoinsAwarded?: number }
+  > {
+    if (offerId === 'offline_reward_bonus') {
+      const reward = this.pendingOfflineReward;
+      if (
+        !reward ||
+        reward.claimed ||
+        this.claimedOfflineSources.has(reward.sourceTimestamp)
+      ) {
+        return {
+          granted: false,
+          reason: 'invalid_amount',
+          offerId,
+          bonusCoinsAwarded: 0,
+          boostActivated: false,
+        };
+      }
+
+      const sourceTimestamp = reward.sourceTimestamp;
+      const baseCoins = reward.coinsEarned;
+      const calculatedAt = reward.calculatedAt;
+      this.emitSnapshot();
+
+      const grant = await this.monetization.executeRewardedOffer(offerId, {
+        baseOfflineCoins: baseCoins,
+        wave: this.waves.getState().currentWave,
+      });
+
+      if (!grant.granted) {
+        this.emitSnapshot();
+        return grant;
+      }
+
+      // Guard against duplicate claim if base reward was claimed concurrently
+      if (this.claimedOfflineSources.has(sourceTimestamp)) {
+        this.emitSnapshot();
+        return {
+          granted: false,
+          reason: 'invalid_amount',
+          offerId,
+          bonusCoinsAwarded: 0,
+          boostActivated: false,
+        };
+      }
+
+      reward.claimed = true;
+      this.claimedOfflineSources.add(sourceTimestamp);
+      this.pendingOfflineReward = null;
+
+      const totalAwarded =
+        Math.max(0, baseCoins) + Math.max(0, grant.bonusCoinsAwarded);
+      if (totalAwarded > 0) {
+        this.currencies.add('gold', totalAwarded);
+      }
+      this.lastOfflineRewardAt = Math.max(
+        this.lastOfflineRewardAt,
+        calculatedAt,
+        Date.now()
+      );
+      void this.persist();
+      this.emitSnapshot();
+
+      return {
+        ...grant,
+        baseOfflineCoinsAwarded: baseCoins,
+      };
+    }
+
+    // Never interrupt active combat with rewarded ad UI: ensure gameplay is paused first
+    if (this.phase === 'ACTIVE') {
+      this.setPhase('PAUSED');
+    } else {
+      this.emitSnapshot();
+    }
+
+    const grant = await this.monetization.executeRewardedOffer(offerId, {
+      wave: this.waves.getState().currentWave,
+    });
+
+    if (grant.granted) {
+      if (grant.bonusCoinsAwarded > 0) {
+        this.currencies.add('gold', grant.bonusCoinsAwarded);
+      }
+      this.tank.setTransientAttackMultiplier(
+        this.monetization.getAttackPowerMultiplier()
+      );
+      void this.persist();
+    }
+
+    this.emitSnapshot();
+    return grant;
+  }
+
+  async tryShowTransitionInterstitial(
+    transition: 'return_to_title' | 'battle_restart'
+  ) {
+    return this.monetization.executeTransitionInterstitial(transition, {
+      isCombatActive: this.phase === 'ACTIVE' || this.isRecovering,
+      gameplayElapsedSec: this.totalGameplaySec,
     });
   }
 
@@ -1016,6 +1245,7 @@ export class GameEngine {
         forge: this.forge.exportState(),
         skillCollection: this.skillCollection.exportState(),
         skillSlots: this.skills.exportState(),
+        skillLevels: this.skills.exportLearnedSkillLevels(),
         pendingSkills: this.skillUpgrade.exportPendingSkills(),
         autoUpgrade: this.skillUpgrade.exportAutoUpgradeState(),
         monetization: this.monetization.exportState(),
@@ -1071,6 +1301,7 @@ export class GameEngine {
     }
 
     this.battleStats.elapsedSeconds += dt;
+    this.totalGameplaySec += dt;
     const bounds = this.battlefield.getBounds();
     const tankState = this.tank.getState();
 
@@ -1081,7 +1312,7 @@ export class GameEngine {
     this.tank.setTransientAttackMultiplier(
       this.monetization.getAttackPowerMultiplier()
     );
-    if (monetizationTicked && this.monetization.getActiveBoostState().active) {
+    if (monetizationTicked) {
       hudDirty = true;
     }
 
@@ -1243,7 +1474,14 @@ export class GameEngine {
               strike.targetY
             );
             effectiveDamage = dmgRes.effectiveDamage;
-            if (effectiveDamage > 0) {
+            if (dmgRes.absorbedByShield > 0 && effectiveDamage === 0) {
+              this.combat.spawnShieldPulseEffect(
+                tankState.position.x,
+                tankState.position.y,
+                46
+              );
+              soundEffects.playClick(640);
+            } else if (effectiveDamage > 0) {
               this.playerDamageFlashTimer = 0.28;
             }
             if (dmgRes.defeated) {
@@ -1327,7 +1565,15 @@ export class GameEngine {
           projHit.fromX,
           projHit.fromY
         );
-        if (dmgRes.effectiveDamage > 0) {
+        if (dmgRes.absorbedByShield > 0 && dmgRes.effectiveDamage === 0) {
+          this.combat.spawnShieldPulseEffect(
+            tankState.position.x,
+            tankState.position.y,
+            46
+          );
+          soundEffects.playClick(640);
+          hudDirty = true;
+        } else if (dmgRes.effectiveDamage > 0) {
           this.combat.spawnEnemyProjectileHit(
             projHit.fromX,
             projHit.fromY,

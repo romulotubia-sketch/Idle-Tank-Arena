@@ -28,6 +28,47 @@ class SoundEffectsController {
   private musicTimerId: number | null = null;
   private musicStep = 0;
 
+  // External mute flags (do not mutate user preferences)
+  private platformAudioEnabled = true;
+  private adMuted = false;
+  private visibilityMuted = false;
+
+  private isExternallyMuted(): boolean {
+    return !this.platformAudioEnabled || this.adMuted || this.visibilityMuted;
+  }
+
+  setPlatformAudioEnabled(enabled: boolean): void {
+    this.platformAudioEnabled = Boolean(enabled);
+    this.syncExternalMuteState();
+  }
+
+  setAdMuted(muted: boolean): void {
+    this.adMuted = Boolean(muted);
+    this.syncExternalMuteState();
+  }
+
+  setVisibilityMuted(muted: boolean): void {
+    this.visibilityMuted = Boolean(muted);
+    this.syncExternalMuteState();
+  }
+
+  private syncExternalMuteState(): void {
+    this.updateSfxMasterGain();
+    this.refreshMusicState();
+    if (this.ctx) {
+      if (this.isExternallyMuted()) {
+        if (this.ctx.state === 'running') {
+          this.ctx.suspend().catch(() => {});
+        }
+      } else if (
+        this.ctx.state === 'suspended' &&
+        (this.enabled || (this.musicEnabled && this.musicShouldPlay))
+      ) {
+        this.ctx.resume().catch(() => {});
+      }
+    }
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     this.updateSfxMasterGain();
@@ -70,6 +111,7 @@ class SoundEffectsController {
   }
 
   unlockAudio(): void {
+    if (this.isExternallyMuted()) return;
     const ctx = this.ensureBaseContext();
     if (!ctx) return;
     if (this.musicEnabled && this.musicShouldPlay && this.musicVolume > 0) {
@@ -90,20 +132,23 @@ class SoundEffectsController {
     }
     if (!this.ctx) return null;
 
-    if (this.ctx.state === 'suspended') {
+    if (this.ctx.state === 'suspended' && !this.isExternallyMuted()) {
       this.ctx.resume().catch(() => {});
     }
 
     if (!this.sfxGain) {
       this.sfxGain = this.ctx.createGain();
-      this.sfxGain.gain.value = this.enabled ? this.soundVolume : 0;
+      this.sfxGain.gain.value =
+        this.enabled && !this.isExternallyMuted() ? this.soundVolume : 0;
       this.sfxGain.connect(this.ctx.destination);
     }
 
     if (!this.musicGain) {
       this.musicGain = this.ctx.createGain();
       this.musicGain.gain.value =
-        this.musicEnabled && this.musicShouldPlay
+        this.musicEnabled &&
+        this.musicShouldPlay &&
+        !this.isExternallyMuted()
           ? this.musicVolume * 0.22
           : 0;
       this.musicGain.connect(this.ctx.destination);
@@ -115,13 +160,17 @@ class SoundEffectsController {
   private updateSfxMasterGain(): void {
     if (!this.ctx || !this.sfxGain) return;
     const now = this.ctx.currentTime;
-    const target = this.enabled ? this.soundVolume : 0;
+    const target =
+      this.enabled && !this.isExternallyMuted() ? this.soundVolume : 0;
     this.sfxGain.gain.setTargetAtTime(target, now, 0.02);
   }
 
   private refreshMusicState(): void {
     const active =
-      this.musicEnabled && this.musicShouldPlay && this.musicVolume > 0.005;
+      this.musicEnabled &&
+      this.musicShouldPlay &&
+      this.musicVolume > 0.005 &&
+      !this.isExternallyMuted();
     if (!active) {
       this.stopMusicLoop();
       if (this.ctx && this.musicGain) {
@@ -147,7 +196,12 @@ class SoundEffectsController {
 
     this.scheduleAmbientBar();
     this.musicTimerId = window.setInterval(() => {
-      if (!this.musicEnabled || !this.musicShouldPlay || this.musicVolume <= 0.005) {
+      if (
+        !this.musicEnabled ||
+        !this.musicShouldPlay ||
+        this.musicVolume <= 0.005 ||
+        this.isExternallyMuted()
+      ) {
         this.stopMusicLoop();
         return;
       }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   ArrowUpCircle,
@@ -102,11 +102,17 @@ export function SkillCollectionModal({
   onClose,
 }: SkillCollectionModalProps) {
   const [selectedSkillId, setSelectedSkillId] = useState<SkillId>(
-    entries[0]?.skillId ?? 'cannon'
+    highlightedSkillId ?? entries[0]?.skillId ?? 'cannon'
   );
   const [mobileTab, setMobileTab] = useState<MobileCollectionTab>('collection');
   const [rarityFilter, setRarityFilter] = useState<RarityFilter>('all');
   const [sortMode, setSortMode] = useState<CollectionSortMode>('rarity');
+
+  useEffect(() => {
+    if (highlightedSkillId) {
+      setSelectedSkillId(highlightedSkillId);
+    }
+  }, [highlightedSkillId]);
 
   const visibleEntries = useMemo(() => {
     const filtered = entries.filter((entry) => {

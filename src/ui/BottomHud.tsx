@@ -60,6 +60,7 @@ interface BottomHudProps {
   autoUpgradeEnabled: boolean;
   highlightedSlotIndex: number | null;
   upgradedSlotIndex: number | null;
+  activeSwitchSlotIndex?: number | null;
   onSummonClick: () => void;
   onSkillSlotClick: (slotIndex: number) => void;
   onOpenPendingSkills: () => void;
@@ -134,6 +135,7 @@ export function BottomHud({
   autoUpgradeEnabled,
   highlightedSlotIndex,
   upgradedSlotIndex,
+  activeSwitchSlotIndex = null,
   onSummonClick,
   onSkillSlotClick,
   onOpenPendingSkills,
@@ -158,6 +160,7 @@ export function BottomHud({
               : undefined;
             const isHighlighted = highlightedSlotIndex === slot.index;
             const isUpgraded = upgradedSlotIndex === slot.index;
+            const isSwitching = activeSwitchSlotIndex === slot.index;
             const isMaxLevel = Boolean(def && slot.level >= MAX_SKILL_LEVEL);
 
             const cdRatio =
@@ -171,7 +174,7 @@ export function BottomHud({
             let borderColor: string | undefined;
             if (isUpgraded) {
               borderColor = '#34D399';
-            } else if (isHighlighted) {
+            } else if (isHighlighted || isSwitching) {
               borderColor = '#FCD34D';
             } else if (def) {
               borderColor = `${def.accentColor}88`;
@@ -187,17 +190,17 @@ export function BottomHud({
                 }}
                 title={
                   def
-                    ? `${def.name} Lv.${slot.level}${isMaxLevel ? ' (Max)' : ''}`
-                    : `Skill slot ${slot.index + 1} (Empty)`
+                    ? `${def.name} Lv.${slot.level}${isMaxLevel ? ' (Max)' : ''} · Tap to switch`
+                    : `Skill slot ${slot.index + 1} (Empty) · Tap to equip`
                 }
                 aria-label={
                   def
                     ? `Skill slot ${slot.index + 1}: ${def.name} Level ${slot.level}${
                         isMaxLevel ? ', Max Level' : ''
-                      }`
-                    : `Skill slot ${slot.index + 1}, empty`
+                      }. Tap to switch skill.`
+                    : `Skill slot ${slot.index + 1}, empty. Tap to equip skill.`
                 }
-                className={`group relative overflow-hidden w-full landscape:w-11 sm:w-12 md:w-13 h-11 sm:h-12 rounded-lg flex flex-col items-center justify-center transition-colors shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
+                className={`group relative overflow-hidden w-full landscape:w-10 sm:w-11 md:w-12 h-11 sm:h-12 rounded-lg flex flex-col items-center justify-center transition-colors shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
                   def
                     ? isUpgraded
                       ? 'bg-[#132B24] border-2 ring-2 ring-emerald-400'
@@ -206,7 +209,9 @@ export function BottomHud({
                 } ${isUpgraded ? 'animate-skill-upgrade' : ''} ${
                   isHighlighted && !isUpgraded
                     ? 'animate-summon-pop ring-2 ring-amber-300'
-                    : ''
+                    : isSwitching && !isUpgraded
+                      ? 'ring-2 ring-amber-400'
+                      : ''
                 }`}
                 style={borderColor ? { borderColor } : undefined}
               >

@@ -487,8 +487,10 @@ export class CombatSystem {
       if (enemy.isDying || enemy.hp <= 0) continue;
       const dx = enemy.position.x - cx;
       const dy = enemy.position.y - cy;
-      const dist = Math.hypot(dx, dy);
-      if (dist <= aoeRadius + enemy.radius) {
+      const maxDist = aoeRadius + enemy.radius;
+      const distSq = dx * dx + dy * dy;
+      if (distSq <= maxDist * maxDist) {
+        const dist = Math.sqrt(distSq);
         const inv = dist > 0.01 ? 1 / dist : 0;
         this.applyDirectDamage(
           enemy,
@@ -765,27 +767,41 @@ export class CombatSystem {
     durationSec: number,
     tier: number
   ): void {
-    this.drones.length = 0;
     const count = Math.max(1, Math.min(MAX_DRONES, droneCount));
+    if (this.drones.length > count) {
+      this.drones.length = count;
+    }
+
     for (let i = 0; i < count; i++) {
-      const orbitAngle = (i * Math.PI * 2) / count;
-      const orbitRadius = 62 + (i % 2) * 14;
-      this.drones.push({
-        uid: this.nextAuxUid++,
-        x: centerX + Math.cos(orbitAngle) * orbitRadius,
-        y: centerY + Math.sin(orbitAngle) * orbitRadius,
-        orbitAngle,
-        orbitRadius,
-        orbitSpeed: i % 2 === 0 ? 1.85 : 1.55,
-        aimAngle: orbitAngle,
-        damage,
-        range,
-        fireInterval,
-        fireCooldown: 0.12 + i * 0.1,
-        ttl: durationSec,
-        maxTtl: durationSec,
-        tier,
-      });
+      const existing = this.drones[i];
+      if (existing) {
+        existing.damage = damage;
+        existing.range = range;
+        existing.fireInterval = fireInterval;
+        existing.fireCooldown = Math.min(existing.fireCooldown, fireInterval);
+        existing.ttl = durationSec;
+        existing.maxTtl = durationSec;
+        existing.tier = tier;
+      } else {
+        const orbitAngle = (i * Math.PI * 2) / count;
+        const orbitRadius = 62 + (i % 2) * 14;
+        this.drones.push({
+          uid: this.nextAuxUid++,
+          x: centerX + Math.cos(orbitAngle) * orbitRadius,
+          y: centerY + Math.sin(orbitAngle) * orbitRadius,
+          orbitAngle,
+          orbitRadius,
+          orbitSpeed: i % 2 === 0 ? 1.85 : 1.55,
+          aimAngle: orbitAngle,
+          damage,
+          range,
+          fireInterval,
+          fireCooldown: 0.12 + i * 0.1,
+          ttl: durationSec,
+          maxTtl: durationSec,
+          tier,
+        });
+      }
     }
     this.pushEffect({
       kind: 'hit_ring',
@@ -1504,8 +1520,10 @@ export class CombatSystem {
             if (target.isDying || target.hp <= 0) continue;
             const dx = target.position.x - p.x;
             const dy = target.position.y - p.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist <= radius + target.radius) {
+            const maxDist = radius + target.radius;
+            const distSq = dx * dx + dy * dy;
+            if (distSq <= maxDist * maxDist) {
+              const dist = Math.sqrt(distSq);
               const inv = dist > 0.01 ? 1 / dist : 0;
               enemySystem.applySlow(
                 target,
@@ -1537,8 +1555,10 @@ export class CombatSystem {
             if (target.isDying || target.hp <= 0) continue;
             const dx = target.position.x - p.x;
             const dy = target.position.y - p.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist <= radius + target.radius) {
+            const maxDist = radius + target.radius;
+            const distSq = dx * dx + dy * dy;
+            if (distSq <= maxDist * maxDist) {
+              const dist = Math.sqrt(distSq);
               const inv = dist > 0.01 ? 1 / dist : 0;
               enemySystem.applyAcid(
                 target,
@@ -1802,8 +1822,10 @@ export class CombatSystem {
       for (let e = 0; e < enemies.length; e++) {
         const enemy = enemies[e];
         if (enemy.isDying || enemy.hp <= 0) continue;
-        const dist = Math.hypot(enemy.position.x - m.x, enemy.position.y - m.y);
-        if (dist <= m.triggerRadius + enemy.radius) {
+        const dx = enemy.position.x - m.x;
+        const dy = enemy.position.y - m.y;
+        const maxDist = m.triggerRadius + enemy.radius;
+        if (dx * dx + dy * dy <= maxDist * maxDist) {
           triggered = true;
           break;
         }

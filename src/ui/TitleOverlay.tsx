@@ -1,9 +1,14 @@
 interface TitleOverlayProps {
   highestWave: number;
+  isInitializing?: boolean;
   onStart: () => void;
 }
 
-export function TitleOverlay({ highestWave, onStart }: TitleOverlayProps) {
+export function TitleOverlay({
+  highestWave,
+  isInitializing = false,
+  onStart,
+}: TitleOverlayProps) {
   return (
     <div
       className="absolute inset-0 z-20 flex items-center justify-center bg-[#0F1318]/75 backdrop-blur-xs p-4"
@@ -34,10 +39,11 @@ export function TitleOverlay({ highestWave, onStart }: TitleOverlayProps) {
 
         <button
           type="button"
+          disabled={isInitializing}
           onClick={onStart}
-          className="w-full min-h-[44px] px-6 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 font-semibold text-sm transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+          className="w-full min-h-[44px] px-6 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 active:bg-amber-600 disabled:opacity-70 disabled:cursor-wait text-slate-950 font-semibold text-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
         >
-          Start Game
+          {isInitializing ? 'Loading Progress...' : 'Start Game'}
         </button>
       </div>
     </div>

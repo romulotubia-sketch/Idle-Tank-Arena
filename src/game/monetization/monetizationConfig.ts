@@ -1,7 +1,8 @@
-import { MonetizationOfferId } from '../types';
+import { InterstitialTransitionId, MonetizationOfferId } from '../types';
 
 export interface OfflineRewardBonusConfig {
   readonly id: 'offline_reward_bonus';
+  readonly placementId: string;
   readonly enabled: boolean;
   readonly bonusMultiplier: number;
   readonly maxBonusCoins: number;
@@ -13,6 +14,7 @@ export interface OfflineRewardBonusConfig {
 
 export interface OptionalCoinBonusConfig {
   readonly id: 'optional_coin_bonus';
+  readonly placementId: string;
   readonly enabled: boolean;
   readonly baseCoins: number;
   readonly coinsPerWave: number;
@@ -25,6 +27,7 @@ export interface OptionalCoinBonusConfig {
 
 export interface TemporaryBoostConfig {
   readonly id: 'temporary_boost';
+  readonly placementId: string;
   readonly enabled: boolean;
   readonly durationSec: number;
   readonly cooldownSec: number;
@@ -35,14 +38,31 @@ export interface TemporaryBoostConfig {
   readonly shortDesc: string;
 }
 
+export interface InterstitialConfig {
+  readonly enabled: boolean;
+  readonly minIntervalSec: number;
+  readonly minGameplaySecBeforeFirst: number;
+  readonly allowedTransitions: Record<InterstitialTransitionId, boolean>;
+  readonly placements: Record<InterstitialTransitionId, string>;
+}
+
 export interface MonetizationConfig {
+  // Master switch allowing runtime Playgama Bridge SDK ad availability detection
   readonly sdkConnected: boolean;
   readonly providerName: 'Playgama';
   readonly features: {
+    readonly rewardedAds: boolean;
+    readonly interstitialAds: boolean;
     readonly offlineRewardBonus: boolean;
     readonly optionalCoinBonus: boolean;
     readonly temporaryBoost: boolean;
   };
+  readonly adBehavior: {
+    readonly pauseGameplayDuringAds: boolean;
+    readonly muteAudioDuringAds: boolean;
+    readonly allowAdFreeFallback: boolean;
+  };
+  readonly interstitial: InterstitialConfig;
   readonly offers: {
     readonly offline_reward_bonus: OfflineRewardBonusConfig;
     readonly optional_coin_bonus: OptionalCoinBonusConfig;
@@ -57,17 +77,37 @@ export const MONETIZATION_OFFER_IDS: readonly MonetizationOfferId[] = [
 ] as const;
 
 export const MONETIZATION_CONFIG: MonetizationConfig = {
-  // Remains false until the real Playgama Rewarded Ads SDK integration step
-  sdkConnected: false,
+  sdkConnected: true,
   providerName: 'Playgama',
   features: {
+    rewardedAds: true,
+    interstitialAds: true,
     offlineRewardBonus: true,
     optionalCoinBonus: true,
     temporaryBoost: true,
   },
+  adBehavior: {
+    pauseGameplayDuringAds: true,
+    muteAudioDuringAds: true,
+    allowAdFreeFallback: true,
+  },
+  interstitial: {
+    enabled: true,
+    minIntervalSec: 90,
+    minGameplaySecBeforeFirst: 45,
+    allowedTransitions: {
+      return_to_title: true,
+      battle_restart: true,
+    },
+    placements: {
+      return_to_title: 'title_return',
+      battle_restart: 'battle_restart',
+    },
+  },
   offers: {
     offline_reward_bonus: {
       id: 'offline_reward_bonus',
+      placementId: 'offline_reward_bonus',
       enabled: true,
       bonusMultiplier: 0.5, // +50% optional extra Coins on top of base offline Coins
       maxBonusCoins: 25000,
@@ -78,6 +118,7 @@ export const MONETIZATION_CONFIG: MonetizationConfig = {
     },
     optional_coin_bonus: {
       id: 'optional_coin_bonus',
+      placementId: 'optional_coin_bonus',
       enabled: true,
       baseCoins: 150,
       coinsPerWave: 35,
@@ -89,6 +130,7 @@ export const MONETIZATION_CONFIG: MonetizationConfig = {
     },
     temporary_boost: {
       id: 'temporary_boost',
+      placementId: 'temporary_boost',
       enabled: true,
       durationSec: 120,
       cooldownSec: 240,
