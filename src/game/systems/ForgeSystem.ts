@@ -1,6 +1,7 @@
 import { FORGE_CONFIG } from '../constants';
 import { generateForgedEquipmentItem } from '../data/equipmentCatalog';
 import {
+  AutoForgeEvent,
   AutoForgeSettings,
   AutoForgeStopReason,
   EquipmentItem,
@@ -26,7 +27,10 @@ export interface StartForgeResult {
 
 export interface ForgeDismantleResult {
   success: boolean;
-  reason?: 'no_pending_item' | 'cannot_dismantle_equipped';
+  reason?:
+    | 'no_pending_item'
+    | 'cannot_dismantle_equipped'
+    | 'cannot_dismantle_locked';
   coinsAwarded?: number;
   dismantledItem?: EquipmentItem;
 }
@@ -145,7 +149,10 @@ export class ForgeSystem {
     return { success: true, costCoins: cost };
   }
 
-  private startAutoForgeCycle(currencies: CurrencySystem): {
+  private startAutoForgeCycle(
+    currencies: CurrencySystem,
+    precedingItemEvent?: AutoForgeEvent | null
+  ): {
     success: boolean;
     costCoins?: number;
   } {
@@ -160,13 +167,21 @@ export class ForgeSystem {
     const balance = currencies.getBalances().gold;
     const budgetCheck = this.autoForge.canSpendForForge(cost, balance);
     if (!budgetCheck.allowed) {
-      this.autoForge.stop(budgetCheck.stopReason ?? 'insufficient_coins');
+      this.autoForge.stop(
+        budgetCheck.stopReason ?? 'insufficient_coins',
+        undefined,
+        precedingItemEvent
+      );
       return { success: false };
     }
 
     const spent = currencies.spend('gold', cost);
     if (!spent) {
-      this.autoForge.stop('insufficient_coins');
+      this.autoForge.stop(
+        'insufficient_coins',
+        undefined,
+        precedingItemEvent
+      );
       return { success: false };
     }
 
@@ -184,6 +199,22 @@ export class ForgeSystem {
     if (this.autoForge.isEnabled()) {
       return { processedItem: false };
     }
+
+    // If a qualifying item is still blocked by a full inventory, preserve session counters and prompt player
+    if (this.status === 'result_ready' && this.pendingItem) {
+      const evaluation = this.autoForge.evaluateItem(this.pendingItem);
+      if (evaluation.keep && equipment.isInventoryFull()) {
+        this.autoForge.stop(
+          'inventory_full',
+          `Inventory full: ${this.pendingItem.name} waiting in Forge — free 1 slot to resume`
+        );
+        return {
+          processedItem: false,
+          stoppedReason: 'inventory_full',
+        };
+      }
+    }
+
     this.autoForge.startSession();
     return this.processAutoForgeStep(currencies, equipment);
   }
@@ -221,8 +252,8 @@ export class ForgeSystem {
       if (evaluation.keep) {
         const keepResult = this.resolveKeepInInventory(equipment);
         if (keepResult.success && keepResult.item) {
-          this.autoForge.recordKept(keepResult.item);
-          const next = this.startAutoForgeCycle(currencies);
+          const keptEvent = this.autoForge.recordKept(keepResult.item);
+          const next = this.startAutoForgeCycle(currencies, keptEvent);
           return {
             processedItem: true,
             kept: true,
@@ -235,7 +266,10 @@ export class ForgeSystem {
         }
 
         // Inventory is full: keep forged item safely in Forge and stop Auto Forge
-        this.autoForge.stop('inventory_full');
+        this.autoForge.stop(
+          'inventory_full',
+          `Inventory full: ${this.pendingItem.name} waiting in Forge — free 1 slot to resume`
+        );
         return {
           processedItem: true,
           kept: false,
@@ -247,11 +281,11 @@ export class ForgeSystem {
       const dismantleResult = this.resolveDismantle(currencies);
       if (dismantleResult.success && dismantleResult.dismantledItem) {
         const coinsAwarded = dismantleResult.coinsAwarded ?? 0;
-        this.autoForge.recordDismantled(
+        const dismantledEvent = this.autoForge.recordDismantled(
           dismantleResult.dismantledItem,
           coinsAwarded
         );
-        const next = this.startAutoForgeCycle(currencies);
+        const next = this.startAutoForgeCycle(currencies, dismantledEvent);
         return {
           processedItem: true,
           dismantled: true,
@@ -333,6 +367,9 @@ export class ForgeSystem {
     const item = this.pendingItem;
     if (item.equipped) {
       return { success: false, reason: 'cannot_dismantle_equipped' };
+    }
+    if (item.locked) {
+      return { success: false, reason: 'cannot_dismantle_locked' };
     }
 
     const coinsAwarded = this.getDismantleValue(item);

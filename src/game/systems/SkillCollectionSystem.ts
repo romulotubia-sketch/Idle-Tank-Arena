@@ -62,7 +62,7 @@ const INITIAL_UNLOCK_SET = new Set<SkillId>(
 
 export class SkillCollectionSystem {
   private readonly records = new Map<SkillId, InternalSkillRecord>();
-  private lastUpgradeTimestampMs = 0;
+  private lastUpgradeTimestampMs = -10000;
   private readonly minUpgradeIntervalMs = 180;
 
   constructor() {
@@ -192,6 +192,19 @@ export class SkillCollectionSystem {
       fragmentsAwarded: awarded,
       entry: this.toPublicEntry(rec),
     };
+  }
+
+  awardBonusFragments(skillId: SkillId, amount: number): number {
+    const cleanAmount = Math.max(0, Math.floor(amount));
+    if (cleanAmount <= 0) return 0;
+    const rec = this.records.get(skillId);
+    if (!rec) return 0;
+    if (!rec.unlocked) {
+      rec.unlocked = true;
+      rec.collectionLevel = Math.max(1, rec.collectionLevel);
+    }
+    rec.fragments = Math.max(0, rec.fragments + cleanAmount);
+    return cleanAmount;
   }
 
   upgradeSkill(
@@ -353,6 +366,113 @@ export class SkillCollectionSystem {
         ).length;
         break;
       }
+      case 'piercing_shot': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.piercing_shot.damagePctPerLevel) / 100;
+        base.bonusPierce = cfg.piercing_shot.bonusPierceAtLevels.filter(
+          (lvl) => effectiveLevel >= lvl
+        ).length;
+        break;
+      }
+      case 'shockwave': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.shockwave.damagePctPerLevel) / 100;
+        base.bonusAoeRadius = bonusSteps * cfg.shockwave.aoeRadiusPerLevel;
+        break;
+      }
+      case 'ricochet': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.ricochet.damagePctPerLevel) / 100;
+        base.bonusPierce = cfg.ricochet.bonusBounceAtLevels.filter(
+          (lvl) => effectiveLevel >= lvl
+        ).length;
+        break;
+      }
+      case 'frost_cannon': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.frost_cannon.damagePctPerLevel) / 100;
+        base.bonusAoeRadius = bonusSteps * cfg.frost_cannon.aoeRadiusPerLevel;
+        break;
+      }
+      case 'acid_shells': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.acid_shells.damagePctPerLevel) / 100;
+        base.bonusAoeRadius = bonusSteps * cfg.acid_shells.aoeRadiusPerLevel;
+        break;
+      }
+      case 'shrapnel_burst': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.shrapnel_burst.damagePctPerLevel) / 100;
+        base.speedMultiplier =
+          1 + (bonusSteps * cfg.shrapnel_burst.speedPctPerLevel) / 100;
+        break;
+      }
+      case 'shield_pulse': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.shield_pulse.damagePctPerLevel) / 100;
+        base.speedMultiplier =
+          1 + (bonusSteps * cfg.shield_pulse.shieldPctPerLevel) / 100;
+        break;
+      }
+      case 'cluster_bombs': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.cluster_bombs.damagePctPerLevel) / 100;
+        base.bonusAoeRadius = bonusSteps * cfg.cluster_bombs.aoeRadiusPerLevel;
+        break;
+      }
+      case 'hunter_missiles': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.hunter_missiles.damagePctPerLevel) / 100;
+        base.speedMultiplier =
+          1 + (bonusSteps * cfg.hunter_missiles.speedPctPerLevel) / 100;
+        break;
+      }
+      case 'gatling_overdrive': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.gatling_overdrive.damagePctPerLevel) / 100;
+        base.cooldownMultiplier =
+          1 /
+          (1 + (bonusSteps * cfg.gatling_overdrive.fireRatePctPerLevel) / 100);
+        break;
+      }
+      case 'laser_array': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.laser_array.damagePctPerLevel) / 100;
+        base.bonusRange = bonusSteps * cfg.laser_array.rangePerLevel;
+        break;
+      }
+      case 'plasma_cannon': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.plasma_cannon.damagePctPerLevel) / 100;
+        base.bonusAoeRadius = bonusSteps * cfg.plasma_cannon.aoeRadiusPerLevel;
+        break;
+      }
+      case 'sentry_turret': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.sentry_turret.damagePctPerLevel) / 100;
+        base.bonusRange = bonusSteps * cfg.sentry_turret.rangePerLevel;
+        break;
+      }
+      case 'drone_squadron': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.drone_squadron.damagePctPerLevel) / 100;
+        base.cooldownMultiplier =
+          1 /
+          (1 + (bonusSteps * cfg.drone_squadron.fireRatePctPerLevel) / 100);
+        break;
+      }
+      case 'orbital_strike': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.orbital_strike.damagePctPerLevel) / 100;
+        base.bonusAoeRadius = bonusSteps * cfg.orbital_strike.aoeRadiusPerLevel;
+        break;
+      }
+      case 'thunderstorm': {
+        base.damageMultiplier =
+          1 + (bonusSteps * cfg.thunderstorm.damagePctPerLevel) / 100;
+        base.bonusRange = bonusSteps * cfg.thunderstorm.rangePerLevel;
+        break;
+      }
     }
 
     return base;
@@ -494,6 +614,214 @@ export class SkillCollectionSystem {
             label: 'Max Active Mines',
             currentText: `+${curr.bonusMaxMines}`,
             nextText: next ? `+${next.bonusMaxMines}` : null,
+          },
+        ];
+      case 'piercing_shot':
+        return [
+          {
+            label: 'Bolt Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Bonus Pierce',
+            currentText: `+${curr.bonusPierce}`,
+            nextText: next ? `+${next.bonusPierce}` : null,
+          },
+        ];
+      case 'shockwave':
+        return [
+          {
+            label: 'Pulse Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Shockwave Radius',
+            currentText: `+${Math.round(curr.bonusAoeRadius)} px`,
+            nextText: next ? `+${Math.round(next.bonusAoeRadius)} px` : null,
+          },
+        ];
+      case 'ricochet':
+        return [
+          {
+            label: 'Disc Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Bonus Bounces',
+            currentText: `+${curr.bonusPierce}`,
+            nextText: next ? `+${next.bonusPierce}` : null,
+          },
+        ];
+      case 'frost_cannon':
+        return [
+          {
+            label: 'Cryo Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Freeze Radius',
+            currentText: `+${Math.round(curr.bonusAoeRadius)} px`,
+            nextText: next ? `+${Math.round(next.bonusAoeRadius)} px` : null,
+          },
+        ];
+      case 'acid_shells':
+        return [
+          {
+            label: 'Acid & Impact Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Splash Radius',
+            currentText: `+${curr.bonusAoeRadius.toFixed(1)} px`,
+            nextText: next ? `+${next.bonusAoeRadius.toFixed(1)} px` : null,
+          },
+        ];
+      case 'shrapnel_burst':
+        return [
+          {
+            label: 'Shell & Shard Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Projectile Speed',
+            currentText: pct(curr.speedMultiplier),
+            nextText: next ? pct(next.speedMultiplier) : null,
+          },
+        ];
+      case 'shield_pulse':
+        return [
+          {
+            label: 'Pulse Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Shield Capacity',
+            currentText: pct(curr.speedMultiplier),
+            nextText: next ? pct(next.speedMultiplier) : null,
+          },
+        ];
+      case 'cluster_bombs':
+        return [
+          {
+            label: 'Bomb & Bomblet Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Submunition Radius',
+            currentText: `+${Math.round(curr.bonusAoeRadius)} px`,
+            nextText: next ? `+${Math.round(next.bonusAoeRadius)} px` : null,
+          },
+        ];
+      case 'hunter_missiles':
+        return [
+          {
+            label: 'Missile Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Flight Speed',
+            currentText: pct(curr.speedMultiplier),
+            nextText: next ? pct(next.speedMultiplier) : null,
+          },
+        ];
+      case 'gatling_overdrive':
+        return [
+          {
+            label: 'Volley Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Overdrive Cycle Rate',
+            currentText: fireRatePct(curr.cooldownMultiplier),
+            nextText: next ? fireRatePct(next.cooldownMultiplier) : null,
+          },
+        ];
+      case 'laser_array':
+        return [
+          {
+            label: 'Beam Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Beam Reach',
+            currentText: `+${Math.round(curr.bonusRange)} px`,
+            nextText: next ? `+${Math.round(next.bonusRange)} px` : null,
+          },
+        ];
+      case 'plasma_cannon':
+        return [
+          {
+            label: 'Plasma & Vortex Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Vortex Radius',
+            currentText: `+${curr.bonusAoeRadius.toFixed(1)} px`,
+            nextText: next ? `+${next.bonusAoeRadius.toFixed(1)} px` : null,
+          },
+        ];
+      case 'sentry_turret':
+        return [
+          {
+            label: 'Turret Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Targeting Range',
+            currentText: `+${Math.round(curr.bonusRange)} px`,
+            nextText: next ? `+${Math.round(next.bonusRange)} px` : null,
+          },
+        ];
+      case 'drone_squadron':
+        return [
+          {
+            label: 'Drone Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Drone Fire Rate',
+            currentText: fireRatePct(curr.cooldownMultiplier),
+            nextText: next ? fireRatePct(next.cooldownMultiplier) : null,
+          },
+        ];
+      case 'orbital_strike':
+        return [
+          {
+            label: 'Orbital Blast Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Strike Radius',
+            currentText: `+${Math.round(curr.bonusAoeRadius)} px`,
+            nextText: next ? `+${Math.round(next.bonusAoeRadius)} px` : null,
+          },
+        ];
+      case 'thunderstorm':
+        return [
+          {
+            label: 'Lightning Damage',
+            currentText: pct(curr.damageMultiplier),
+            nextText: next ? pct(next.damageMultiplier) : null,
+          },
+          {
+            label: 'Storm Reach',
+            currentText: `+${Math.round(curr.bonusRange)} px`,
+            nextText: next ? `+${Math.round(next.bonusRange)} px` : null,
           },
         ];
     }

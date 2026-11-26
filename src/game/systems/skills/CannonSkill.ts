@@ -47,8 +47,8 @@ export class CannonSkill implements CombatSkillModule {
     for (let i = 0; i < spec.salvoCount; i++) {
       const spread = spec.salvoCount > 1 ? (i - 0.5) * 0.08 : 0;
       const angle = baseAngle + spread;
-      const spawnX = ctx.tank.position.x + Math.cos(angle) * 36;
-      const spawnY = ctx.tank.position.y + Math.sin(angle) * 36;
+      const spawnX = ctx.tank.position.x + Math.cos(angle) * 54;
+      const spawnY = ctx.tank.position.y + Math.sin(angle) * 54;
 
       ctx.combat.spawnProjectile({
         kind: 'heavy_shell',

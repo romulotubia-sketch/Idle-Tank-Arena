@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Coins, Layers, Settings, ShieldAlert, Swords } from 'lucide-react';
 import {
+  Coins,
+  Layers,
+  Pause,
+  Play,
+  Settings,
+  ShieldAlert,
+  Swords,
+  Zap,
+} from 'lucide-react';
+import {
+  ActiveTemporaryBoostState,
   BossHudState,
   CurrencyBalances,
   GamePhase,
@@ -13,7 +23,9 @@ interface TopHudProps {
   boss: BossHudState | null;
   currencies: CurrencyBalances;
   totalSkillFragments: number;
+  activeBoost?: ActiveTemporaryBoostState;
   onOpenCollection?: () => void;
+  onTogglePause: () => void;
   onOpenSettings: () => void;
 }
 
@@ -23,7 +35,9 @@ export function TopHud({
   boss,
   currencies,
   totalSkillFragments,
+  activeBoost,
   onOpenCollection,
+  onTogglePause,
   onOpenSettings,
 }: TopHudProps) {
   const prevGoldRef = useRef<number>(currencies.gold);
@@ -157,8 +171,18 @@ export function TopHud({
           )}
         </div>
 
-        {/* Right: Coins, Skill Fragments & Settings */}
+        {/* Right: Coins, Active Boost (if running), Skill Fragments & Settings */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {activeBoost?.active && (
+            <div
+              title={`Active Boost: +${Math.round((activeBoost.attackPowerMultiplier - 1) * 100)}% ATK, +${Math.round((activeBoost.coinGainMultiplier - 1) * 100)}% Coins`}
+              className="flex items-center gap-1 h-7 sm:h-8 px-2 rounded-md bg-emerald-950/75 border border-emerald-400/60 font-mono-tabular text-[11px] font-bold text-emerald-200 whitespace-nowrap"
+            >
+              <Zap className="w-3 h-3 text-emerald-400 shrink-0" />
+              <span>{Math.ceil(activeBoost.remainingSec)}s</span>
+            </div>
+          )}
+
           {/* Coins */}
           <div
             title="Coins"
@@ -198,6 +222,32 @@ export function TopHud({
             <span className="font-bold">{totalSkillFragments}</span>
             <span className="hidden md:inline text-[10px] font-sans font-semibold text-slate-400">
               Frags
+            </span>
+          </button>
+
+          {/* Pause / Resume */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onTogglePause();
+            }}
+            aria-label={phase === 'PAUSED' ? 'Resume battle' : 'Pause battle'}
+            title={phase === 'PAUSED' ? 'Resume Battle (Esc)' : 'Pause Battle (Esc)'}
+            disabled={phase !== 'ACTIVE' && phase !== 'PAUSED'}
+            className={`inline-flex items-center justify-center gap-1.5 min-w-[32px] sm:min-w-[36px] h-7 sm:h-8 px-2 lg:px-2.5 rounded-md border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-45 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
+              phase === 'PAUSED'
+                ? 'bg-emerald-950/80 hover:bg-emerald-900/80 border-emerald-400/70 text-emerald-100'
+                : 'bg-[#232D3A] hover:bg-[#2E3A4A] active:bg-[#1B232D] border-[#3C4A5C] text-slate-100'
+            }`}
+          >
+            {phase === 'PAUSED' ? (
+              <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-300 shrink-0" />
+            ) : (
+              <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-300 shrink-0" />
+            )}
+            <span className="hidden lg:inline">
+              {phase === 'PAUSED' ? 'Resume' : 'Pause'}
             </span>
           </button>
 

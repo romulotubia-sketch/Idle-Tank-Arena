@@ -15,7 +15,10 @@ export interface SkillExecutionContext {
   enemySystem: EnemySystem;
   combat: CombatSystem;
   result: CombatStepResult;
+  transientDamageMultiplier?: number;
   getCollectionBonuses?: (skillId: SkillId) => SkillCollectionComputedBonuses;
+  grantShield?: (amount: number, durationSec: number) => void;
+  activateOverdrive?: (fireRateBonus: number, durationSec: number) => void;
 }
 
 export interface CombatSkillModule {
@@ -34,7 +37,14 @@ export function applySkillDamageBonus(
   collectionDamageMultiplier = 1
 ): number {
   const bonusPct = Math.max(0, ctx.tank.stats.skillDamageBonus || 0);
-  const combinedMultiplier = collectionDamageMultiplier * (1 + bonusPct / 100);
+  const transientMult =
+    typeof ctx.transientDamageMultiplier === 'number' &&
+    Number.isFinite(ctx.transientDamageMultiplier) &&
+    ctx.transientDamageMultiplier >= 1
+      ? ctx.transientDamageMultiplier
+      : 1;
+  const combinedMultiplier =
+    collectionDamageMultiplier * (1 + bonusPct / 100) * transientMult;
   return Math.max(1, Math.round(baseDamage * combinedMultiplier));
 }
 

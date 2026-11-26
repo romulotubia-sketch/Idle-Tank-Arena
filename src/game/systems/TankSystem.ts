@@ -22,6 +22,7 @@ export class TankSystem {
   private fireCooldown = 0;
   private currentTargetUid: number | null = null;
   private moveInput: Vector2 = { x: 0, y: 0 };
+  private transientAttackMultiplier = 1;
 
   constructor(centerX: number, centerY: number) {
     this.state = createPlayerTank(centerX, centerY);
@@ -33,6 +34,11 @@ export class TankSystem {
 
   setTurretAngle(angleRadians: number): void {
     this.state.turretAngle = angleRadians;
+  }
+
+  setTransientAttackMultiplier(multiplier: number): void {
+    this.transientAttackMultiplier =
+      Number.isFinite(multiplier) && multiplier >= 1 ? multiplier : 1;
   }
 
   setMovementRadius(radius: number): void {
@@ -106,11 +112,36 @@ export class TankSystem {
     this.state.bodyRecoilX = 0;
     this.state.bodyRecoilY = 0;
     this.state.isMoving = false;
+    this.state.shieldHp = 0;
+    this.state.shieldMaxHp = 0;
+    this.state.shieldTimer = 0;
+    this.state.overdriveTimer = 0;
+    this.state.overdriveFireRateBonus = 0;
     this.state.stats.hp = this.state.stats.maxHp;
     this.fireCooldown = 0.15;
     this.currentTargetUid = null;
     this.moveInput.x = 0;
     this.moveInput.y = 0;
+  }
+
+  addShield(amount: number, durationSec: number): void {
+    const cleanAmount = Math.max(1, Math.round(amount));
+    const current = this.state.shieldHp ?? 0;
+    const nextHp = Math.max(current, cleanAmount);
+    this.state.shieldHp = nextHp;
+    this.state.shieldMaxHp = Math.max(this.state.shieldMaxHp ?? 0, nextHp);
+    this.state.shieldTimer = Math.max(this.state.shieldTimer ?? 0, durationSec);
+  }
+
+  activateOverdrive(fireRateBonus: number, durationSec: number): void {
+    this.state.overdriveFireRateBonus = Math.max(
+      this.state.overdriveFireRateBonus ?? 0,
+      Math.max(0, fireRateBonus)
+    );
+    this.state.overdriveTimer = Math.max(
+      this.state.overdriveTimer ?? 0,
+      durationSec
+    );
   }
 
   resetStatsToDefault(): void {
@@ -131,19 +162,34 @@ export class TankSystem {
     rawDamage: number,
     sourceX?: number,
     sourceY?: number
-  ): { effectiveDamage: number; defeated: boolean } {
+  ): { effectiveDamage: number; absorbedByShield: number; defeated: boolean } {
     if (this.state.stats.hp <= 0) {
-      return { effectiveDamage: 0, defeated: true };
+      return { effectiveDamage: 0, absorbedByShield: 0, defeated: true };
     }
     const reductionRatio = UpgradeSystem.computeArmorReductionRatio(
       this.state.stats.armor
     );
     const afterArmor = rawDamage * (1 - reductionRatio);
-    const effectiveDamage = Math.max(
+    const mitigatedDamage = Math.max(
       1,
       Math.round(afterArmor - (this.state.stats.flatDamageBlock || 0))
     );
-    this.state.stats.hp = Math.max(0, this.state.stats.hp - effectiveDamage);
+
+    let remainingDamage = mitigatedDamage;
+    let absorbedByShield = 0;
+    if ((this.state.shieldHp ?? 0) > 0 && (this.state.shieldTimer ?? 0) > 0) {
+      const shield = this.state.shieldHp ?? 0;
+      absorbedByShield = Math.min(shield, remainingDamage);
+      this.state.shieldHp = Math.max(0, shield - absorbedByShield);
+      remainingDamage -= absorbedByShield;
+      if (this.state.shieldHp <= 0) {
+        this.state.shieldTimer = 0;
+      }
+    }
+
+    if (remainingDamage > 0) {
+      this.state.stats.hp = Math.max(0, this.state.stats.hp - remainingDamage);
+    }
     this.state.hitFlashTimer = 0.13;
 
     if (sourceX !== undefined && sourceY !== undefined) {
@@ -155,7 +201,8 @@ export class TankSystem {
     }
 
     return {
-      effectiveDamage,
+      effectiveDamage: remainingDamage,
+      absorbedByShield,
       defeated: this.state.stats.hp <= 0,
     };
   }
@@ -180,6 +227,20 @@ export class TankSystem {
     if (!isActive || this.state.stats.hp <= 0) {
       this.state.isMoving = false;
       return null;
+    }
+
+    if ((this.state.shieldTimer ?? 0) > 0) {
+      this.state.shieldTimer = Math.max(0, (this.state.shieldTimer ?? 0) - dt);
+      if (this.state.shieldTimer <= 0) {
+        this.state.shieldHp = 0;
+        this.state.shieldMaxHp = 0;
+      }
+    }
+    if ((this.state.overdriveTimer ?? 0) > 0) {
+      this.state.overdriveTimer = Math.max(0, (this.state.overdriveTimer ?? 0) - dt);
+      if (this.state.overdriveTimer <= 0) {
+        this.state.overdriveFireRateBonus = 0;
+      }
     }
 
     this.state.idlePhase += dt * 3.0;
@@ -215,7 +276,11 @@ export class TankSystem {
       remainingDiff <= COMBAT_CONFIG.turretFireToleranceRad &&
       this.fireCooldown <= 0
     ) {
-      const fireRate = Math.max(0.2, this.state.stats.fireRate);
+      const overdriveBonus =
+        (this.state.overdriveTimer ?? 0) > 0
+          ? (this.state.overdriveFireRateBonus ?? 0)
+          : 0;
+      const fireRate = Math.max(0.2, this.state.stats.fireRate * (1 + overdriveBonus));
       this.fireCooldown = 1 / fireRate;
       this.state.recoilOffset = 7.5;
 
@@ -226,15 +291,19 @@ export class TankSystem {
       this.state.bodyRecoilX = -cos * kick;
       this.state.bodyRecoilY = -sin * kick;
 
+      const effectiveAttackPower = Math.max(
+        1,
+        Math.round(this.state.stats.attackPower * this.transientAttackMultiplier)
+      );
       const damage = isCrit
         ? Math.max(
             1,
             Math.round(
-              this.state.stats.attackPower * this.state.stats.critDamage +
+              effectiveAttackPower * this.state.stats.critDamage +
                 (this.state.stats.critBonusFlat || 0)
             )
           )
-        : this.state.stats.attackPower;
+        : effectiveAttackPower;
 
       return {
         muzzleX: this.state.position.x + cos * COMBAT_CONFIG.tankMuzzleOffset,

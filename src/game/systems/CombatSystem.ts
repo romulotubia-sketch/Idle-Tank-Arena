@@ -1,6 +1,9 @@
 import { BOSS_CONFIG, COMBAT_CONFIG } from '../constants';
 import {
   ArenaBounds,
+  CombatDrone,
+  DelayedStrike,
+  DeployableTurret,
   EnemyInstance,
   ExplosionStyle,
   LandmineInstance,
@@ -35,6 +38,18 @@ export interface ProjectileSpawnParams {
   targetX?: number;
   targetY?: number;
   flightDuration?: number;
+  ricochetRemaining?: number;
+  ricochetRange?: number;
+  ricochetRetention?: number;
+  homingTurnRate?: number;
+  homingTargetUid?: number;
+  slowFactor?: number;
+  slowDuration?: number;
+  acidDps?: number;
+  acidDuration?: number;
+  splitCount?: number;
+  splitDamage?: number;
+  splitRadius?: number;
 }
 
 export interface PlayerProjectileHitEvent {
@@ -46,23 +61,62 @@ export interface PlayerProjectileHitEvent {
 
 const MAX_DAMAGE_TEXTS = 22;
 const MAX_LIGHTWEIGHT_PARTICLES = 44;
+const MAX_TURRETS = 3;
+const MAX_DRONES = 4;
+const MAX_DELAYED_STRIKES = 12;
 
 export class CombatSystem {
   private readonly projectiles: ProjectileInstance[] = [];
   private readonly projectilePool: ProjectileInstance[] = [];
   private readonly mines: LandmineInstance[] = [];
+  private readonly turrets: DeployableTurret[] = [];
+  private readonly drones: CombatDrone[] = [];
+  private readonly delayedStrikes: DelayedStrike[] = [];
   private readonly effects: VisualEffect[] = [];
   private readonly effectPool: VisualEffect[] = [];
 
   private nextProjectileUid = 1;
   private nextMineUid = 1;
+  private nextAuxUid = 1;
   private effectSeedCounter = 1;
   private damageTextCount = 0;
   private particleCount = 0;
   private bossDamageBonusPct = 0;
+  private performanceMode = false;
 
   setBossDamageBonusPct(pct: number): void {
     this.bossDamageBonusPct = Math.max(0, pct);
+  }
+
+  setPerformanceMode(enabled: boolean): void {
+    this.performanceMode = Boolean(enabled);
+    if (this.performanceMode && this.effects.length > 0) {
+      let writeIdx = 0;
+      let nextDmgCount = 0;
+      for (let i = 0; i < this.effects.length; i++) {
+        const fx = this.effects[i];
+        if (
+          fx.kind === 'smoke' ||
+          fx.kind === 'debris' ||
+          fx.kind === 'hit_ring' ||
+          fx.kind === 'muzzle'
+        ) {
+          this.releaseEffect(fx);
+          continue;
+        }
+        if (fx.kind === 'damage_text') {
+          nextDmgCount++;
+        }
+        this.effects[writeIdx++] = fx;
+      }
+      this.effects.length = writeIdx;
+      this.particleCount = 0;
+      this.damageTextCount = nextDmgCount;
+    }
+  }
+
+  isPerformanceMode(): boolean {
+    return this.performanceMode;
   }
 
   getProjectiles(): readonly ProjectileInstance[] {
@@ -71,6 +125,18 @@ export class CombatSystem {
 
   getMines(): readonly LandmineInstance[] {
     return this.mines;
+  }
+
+  getTurrets(): readonly DeployableTurret[] {
+    return this.turrets;
+  }
+
+  getDrones(): readonly CombatDrone[] {
+    return this.drones;
+  }
+
+  getDelayedStrikes(): readonly DelayedStrike[] {
+    return this.delayedStrikes;
   }
 
   getEffects(): readonly VisualEffect[] {
@@ -83,6 +149,9 @@ export class CombatSystem {
     }
     this.projectiles.length = 0;
     this.mines.length = 0;
+    this.turrets.length = 0;
+    this.drones.length = 0;
+    this.delayedStrikes.length = 0;
 
     for (let i = 0; i < this.effects.length; i++) {
       this.releaseEffect(this.effects[i]);
@@ -123,7 +192,7 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle,
-      size: isCrit ? 22 : 17,
+      size: isCrit ? 30 : 24,
       life: 0.1,
       maxLife: 0.1,
       color: isCrit ? '#FCD34D' : '#FDE68A',
@@ -134,12 +203,12 @@ export class CombatSystem {
     const sin = Math.sin(angle);
     this.pushParticle({
       kind: 'smoke',
-      x: x + cos * 6,
-      y: y + sin * 6,
-      vx: cos * 38 + (Math.random() - 0.5) * 14,
-      vy: sin * 38 + (Math.random() - 0.5) * 14,
+      x: x + cos * 8,
+      y: y + sin * 8,
+      vx: cos * 42 + (Math.random() - 0.5) * 14,
+      vy: sin * 42 + (Math.random() - 0.5) * 14,
       angle,
-      size: isCrit ? 9 : 7,
+      size: isCrit ? 12 : 9.5,
       life: 0.24,
       maxLife: 0.24,
       color: 'rgba(203, 213, 225, 0.5)',
@@ -153,7 +222,8 @@ export class CombatSystem {
     }
 
     const proj = this.acquireProjectile();
-    const isMortar = params.kind === 'mortar_shell';
+    const isArcing =
+      params.kind === 'mortar_shell' || params.kind === 'cluster_bomblet';
     proj.uid = this.nextProjectileUid++;
     proj.kind = params.kind;
     proj.x = params.x;
@@ -173,9 +243,24 @@ export class CombatSystem {
     proj.visualTier = params.visualTier ?? 1;
     proj.isCrit = params.isCrit ?? false;
     proj.isEnemyProjectile = params.isEnemyProjectile ?? false;
-    proj.smokeCooldown = params.kind === 'rocket' ? 0.035 : 0;
+    proj.smokeCooldown =
+      params.kind === 'rocket' || params.kind === 'hunter_missile' ? 0.035 : 0;
 
-    if (isMortar && params.targetX !== undefined && params.targetY !== undefined) {
+    proj.ricochetRemaining = params.ricochetRemaining ?? 0;
+    proj.ricochetRange = params.ricochetRange ?? 0;
+    proj.ricochetRetention = params.ricochetRetention ?? 0.85;
+    proj.homingTurnRate = params.homingTurnRate ?? 0;
+    proj.homingTargetUid = params.homingTargetUid;
+    proj.speedMag = params.speed;
+    proj.slowFactor = params.slowFactor;
+    proj.slowDuration = params.slowDuration;
+    proj.acidDps = params.acidDps;
+    proj.acidDuration = params.acidDuration;
+    proj.splitCount = params.splitCount;
+    proj.splitDamage = params.splitDamage;
+    proj.splitRadius = params.splitRadius;
+
+    if (isArcing && params.targetX !== undefined && params.targetY !== undefined) {
       proj.startX = params.x;
       proj.startY = params.y;
       proj.targetX = params.targetX;
@@ -184,22 +269,24 @@ export class CombatSystem {
       proj.flightDuration = params.flightDuration ?? 0.72;
       proj.ttl = proj.flightDuration + 0.1;
 
-      // Subtle launch flash from mortar tube
-      this.pushEffect({
-        kind: 'muzzle',
-        x: params.x + Math.cos(params.angle) * 14,
-        y: params.y + Math.sin(params.angle) * 14,
-        tx: params.x,
-        ty: params.y,
-        vx: 0,
-        vy: 0,
-        angle: params.angle,
-        size: 13,
-        life: 0.09,
-        maxLife: 0.09,
-        color: '#FDBA74',
-        secondaryColor: '#F97316',
-      });
+      if (params.kind === 'mortar_shell') {
+        // Subtle launch flash from mortar tube
+        this.pushEffect({
+          kind: 'muzzle',
+          x: params.x + Math.cos(params.angle) * 24,
+          y: params.y + Math.sin(params.angle) * 24,
+          tx: params.x,
+          ty: params.y,
+          vx: 0,
+          vy: 0,
+          angle: params.angle,
+          size: 18,
+          life: 0.09,
+          maxLife: 0.09,
+          color: '#FDBA74',
+          secondaryColor: '#F97316',
+        });
+      }
     } else {
       proj.startX = undefined;
       proj.startY = undefined;
@@ -218,7 +305,7 @@ export class CombatSystem {
           vx: 0,
           vy: 0,
           angle: params.angle,
-          size: 15,
+          size: 20,
           life: 0.085,
           maxLife: 0.085,
           color: '#FDBA74',
@@ -234,7 +321,7 @@ export class CombatSystem {
           vx: 0,
           vy: 0,
           angle: params.angle,
-          size: 9,
+          size: 12,
           life: 0.055,
           maxLife: 0.055,
           color: '#FEF08A',
@@ -248,7 +335,7 @@ export class CombatSystem {
           vx: -Math.cos(params.angle) * 28,
           vy: -Math.sin(params.angle) * 28,
           angle: params.angle,
-          size: 8,
+          size: 10,
           life: 0.22,
           maxLife: 0.22,
           color: 'rgba(203, 213, 225, 0.45)',
@@ -535,11 +622,213 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle,
-      size: 16 + beamWidth,
+      size: 22 + beamWidth,
       life: 0.1,
       maxLife: 0.1,
       color: '#67E8F9',
       secondaryColor: '#ECFEFF',
+    });
+  }
+
+  spawnShockwaveRing(x: number, y: number, radius: number, color = '#94A3B8'): void {
+    this.pushEffect({
+      kind: 'shockwave_ring',
+      x,
+      y,
+      tx: x,
+      ty: y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      size: radius,
+      life: 0.28,
+      maxLife: 0.28,
+      color,
+      secondaryColor: '#E2E8F0',
+    });
+  }
+
+  spawnShieldPulseEffect(x: number, y: number, radius: number): void {
+    this.pushEffect({
+      kind: 'shield_pulse',
+      x,
+      y,
+      tx: x,
+      ty: y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      size: radius,
+      life: 0.34,
+      maxLife: 0.34,
+      color: '#2DD4BF',
+      secondaryColor: '#CCFBF1',
+    });
+  }
+
+  spawnLaserBeam(
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    beamWidth = 5,
+    color = '#F43F5E'
+  ): void {
+    const angle = Math.atan2(toY - fromY, toX - fromX);
+    this.pushEffect({
+      kind: 'laser_beam',
+      x: fromX,
+      y: fromY,
+      tx: toX,
+      ty: toY,
+      vx: 0,
+      vy: 0,
+      angle,
+      size: beamWidth,
+      life: 0.2,
+      maxLife: 0.2,
+      color,
+      secondaryColor: '#FFE4E6',
+      seed: this.effectSeedCounter++,
+    });
+  }
+
+  spawnSkyBolt(x: number, y: number, color = '#60A5FA'): void {
+    this.pushEffect({
+      kind: 'sky_bolt',
+      x,
+      y,
+      tx: x,
+      ty: y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      size: 4.2,
+      life: 0.26,
+      maxLife: 0.26,
+      color,
+      secondaryColor: '#EFF6FF',
+      seed: this.effectSeedCounter++,
+    });
+  }
+
+  deploySentryTurret(
+    x: number,
+    y: number,
+    damage: number,
+    range: number,
+    fireInterval: number,
+    durationSec: number,
+    maxTurrets: number,
+    tier: number
+  ): void {
+    const cap = Math.max(1, Math.min(MAX_TURRETS, maxTurrets));
+    while (this.turrets.length >= cap) {
+      this.turrets.shift();
+    }
+    this.turrets.push({
+      uid: this.nextAuxUid++,
+      x,
+      y,
+      angle: -Math.PI / 2,
+      damage,
+      range,
+      fireInterval,
+      fireCooldown: 0.2,
+      ttl: durationSec,
+      maxTtl: durationSec,
+      tier,
+    });
+    this.pushEffect({
+      kind: 'hit_ring',
+      x,
+      y,
+      tx: x,
+      ty: y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      size: 24,
+      life: 0.26,
+      maxLife: 0.26,
+      color: '#34D399',
+    });
+  }
+
+  deployDroneSquadron(
+    centerX: number,
+    centerY: number,
+    droneCount: number,
+    damage: number,
+    range: number,
+    fireInterval: number,
+    durationSec: number,
+    tier: number
+  ): void {
+    this.drones.length = 0;
+    const count = Math.max(1, Math.min(MAX_DRONES, droneCount));
+    for (let i = 0; i < count; i++) {
+      const orbitAngle = (i * Math.PI * 2) / count;
+      const orbitRadius = 62 + (i % 2) * 14;
+      this.drones.push({
+        uid: this.nextAuxUid++,
+        x: centerX + Math.cos(orbitAngle) * orbitRadius,
+        y: centerY + Math.sin(orbitAngle) * orbitRadius,
+        orbitAngle,
+        orbitRadius,
+        orbitSpeed: i % 2 === 0 ? 1.85 : 1.55,
+        aimAngle: orbitAngle,
+        damage,
+        range,
+        fireInterval,
+        fireCooldown: 0.12 + i * 0.1,
+        ttl: durationSec,
+        maxTtl: durationSec,
+        tier,
+      });
+    }
+    this.pushEffect({
+      kind: 'hit_ring',
+      x: centerX,
+      y: centerY,
+      tx: centerX,
+      ty: centerY,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      size: 56,
+      life: 0.28,
+      maxLife: 0.28,
+      color: '#FBBF24',
+    });
+  }
+
+  scheduleDelayedStrike(params: {
+    kind: 'orbital' | 'thunder' | 'plasma_vortex';
+    x: number;
+    y: number;
+    delaySec: number;
+    radius: number;
+    damage: number;
+    color: string;
+    ticksRemaining?: number;
+    tickInterval?: number;
+  }): void {
+    if (this.delayedStrikes.length >= MAX_DELAYED_STRIKES) {
+      this.delayedStrikes.shift();
+    }
+    this.delayedStrikes.push({
+      uid: this.nextAuxUid++,
+      kind: params.kind,
+      x: params.x,
+      y: params.y,
+      delayRemaining: params.delaySec,
+      totalDelay: Math.max(0.05, params.delaySec),
+      radius: params.radius,
+      damage: params.damage,
+      ticksRemaining: params.ticksRemaining ?? 1,
+      tickInterval: params.tickInterval ?? 0.25,
+      color: params.color,
     });
   }
 
@@ -556,7 +845,7 @@ export class CombatSystem {
       angle,
       speed: 250,
       damage,
-      radius: 6.5,
+      radius: 7.5,
       ttl: 2.2,
       isEnemyProjectile: true,
     });
@@ -570,7 +859,7 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle,
-      size: 14,
+      size: 18,
       life: 0.1,
       maxLife: 0.1,
       color: '#FDE68A',
@@ -592,7 +881,7 @@ export class CombatSystem {
       angle,
       speed: isBurst ? 355 : BOSS_CONFIG.heavyShellSpeed,
       damage,
-      radius: isBurst ? 7 : 8.5,
+      radius: isBurst ? 8 : 10,
       ttl: 2.3,
       visualTier: isBurst ? 1 : 2,
       isEnemyProjectile: true,
@@ -607,7 +896,7 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle,
-      size: isBurst ? 15 : 19,
+      size: isBurst ? 20 : 26,
       life: 0.11,
       maxLife: 0.11,
       color: '#FB7185',
@@ -681,7 +970,7 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle: Math.atan2(toY - fromY, toX - fromX),
-      size: 20,
+      size: 26,
       life: 0.25,
       maxLife: 0.25,
       color: '#F97316',
@@ -698,14 +987,14 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle: 0,
-      size: 30,
+      size: 42,
       life: 0.2,
       maxLife: 0.2,
       color: '#FB7185',
     });
 
     if (damageTaken > 0) {
-      this.spawnDamageText(toX, toY - 36, damageTaken, '#FB923C', true, 0);
+      this.spawnDamageText(toX, toY - 52, damageTaken, '#FB923C', true, 0);
     }
   }
 
@@ -732,7 +1021,7 @@ export class CombatSystem {
         vx: 0,
         vy: 0,
         angle: Math.atan2(toY - fromY, toX - fromX),
-        size: isBoss ? 4.2 : isHeavy ? 3.1 : isScout ? 1.6 : 2.2,
+        size: isBoss ? 5.2 : isHeavy ? 3.8 : isScout ? 2.0 : 2.8,
         life: isBoss ? 0.18 : isHeavy ? 0.16 : 0.12,
         maxLife: isBoss ? 0.18 : isHeavy ? 0.16 : 0.12,
         color: isBoss
@@ -747,14 +1036,14 @@ export class CombatSystem {
 
     this.pushEffect({
       kind: 'impact',
-      x: toX + (Math.random() - 0.5) * 12,
-      y: toY + (Math.random() - 0.5) * 12,
+      x: toX + (Math.random() - 0.5) * 16,
+      y: toY + (Math.random() - 0.5) * 16,
       tx: toX,
       ty: toY,
       vx: 0,
       vy: 0,
       angle: Math.atan2(toY - fromY, toX - fromX),
-      size: isBoss ? 18 : isHeavy ? 14 : isRunner ? 13 : 10,
+      size: isBoss ? 22 : isHeavy ? 18 : isRunner ? 16 : 13,
       life: 0.16,
       maxLife: 0.16,
       color: isBoss
@@ -775,7 +1064,7 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle: 0,
-      size: isBoss ? 34 : isHeavy ? 30 : 25,
+      size: isBoss ? 46 : isHeavy ? 42 : 36,
       life: 0.18,
       maxLife: 0.18,
       color: isBoss ? '#F43F5E' : isHeavy ? '#F97316' : '#FB7185',
@@ -783,7 +1072,7 @@ export class CombatSystem {
 
     this.spawnDamageText(
       toX,
-      toY - 36,
+      toY - 52,
       damageTaken,
       isBoss ? '#F43F5E' : '#FB7185',
       isBoss,
@@ -809,12 +1098,12 @@ export class CombatSystem {
         vx: 0,
         vy: 0,
         angle: 0,
-        size: 38,
+        size: 48,
         life: 0.24,
         maxLife: 0.24,
         color: '#F43F5E',
       });
-      this.spawnDamageText(targetX, targetY - 40, damageTaken, '#F43F5E', true, 0);
+      this.spawnDamageText(targetX, targetY - 56, damageTaken, '#F43F5E', true, 0);
     }
   }
 
@@ -910,7 +1199,7 @@ export class CombatSystem {
       vx: 0,
       vy: 0,
       angle: Math.random() * Math.PI * 2,
-      size: isBoss ? 44 : isHeavy ? 28 : 20,
+      size: isBoss ? 64 : isHeavy ? 35 : 25,
       life: isBoss ? 0.54 : 0.32,
       maxLife: isBoss ? 0.54 : 0.32,
       color: isBoss ? '#F43F5E' : isHeavy ? '#FB923C' : '#F59E0B',
@@ -928,7 +1217,7 @@ export class CombatSystem {
         vx: 0,
         vy: 0,
         angle: 0,
-        size: 105,
+        size: 126,
         life: 0.6,
         maxLife: 0.6,
         color: '#FB7185',
@@ -943,7 +1232,7 @@ export class CombatSystem {
         vx: 0,
         vy: 0,
         angle: 0,
-        size: 58,
+        size: 76,
         life: 0.35,
         maxLife: 0.35,
         color: '#FDE047',
@@ -958,7 +1247,7 @@ export class CombatSystem {
       vx: 0,
       vy: -12,
       angle: 0,
-      size: isBoss ? 28 : isHeavy ? 15 : 11,
+      size: isBoss ? 36 : isHeavy ? 18 : 14,
       life: isBoss ? 0.46 : 0.3,
       maxLife: isBoss ? 0.46 : 0.3,
       color: 'rgba(100, 116, 139, 0.46)',
@@ -1025,9 +1314,9 @@ export class CombatSystem {
       p.prevX = p.x;
       p.prevY = p.y;
 
-      // Arcing Mortar Shell flight
+      // Arcing Mortar Shell & Cluster Bomblet flight
       if (
-        p.kind === 'mortar_shell' &&
+        (p.kind === 'mortar_shell' || p.kind === 'cluster_bomblet') &&
         p.startX !== undefined &&
         p.startY !== undefined &&
         p.targetX !== undefined &&
@@ -1046,9 +1335,9 @@ export class CombatSystem {
             p.aoeRadius,
             p.damage,
             enemySystem,
-            '#F97316',
+            p.kind === 'cluster_bomblet' ? '#FBBF24' : '#F97316',
             result,
-            'mortar'
+            p.kind === 'cluster_bomblet' ? 'rocket' : 'mortar'
           );
           p.active = false;
           this.releaseProjectile(p);
@@ -1058,11 +1347,58 @@ export class CombatSystem {
         continue;
       }
 
-      // Linear Projectiles (Tank shell, Heavy shell, MG bullet, Rocket, Railgun slug)
+      // Homing steering for Hunter Missiles
+      if (p.kind === 'hunter_missile' && (p.homingTurnRate ?? 0) > 0) {
+        let target: EnemyInstance | null = null;
+        if (p.homingTargetUid !== undefined) {
+          for (let e = 0; e < enemies.length; e++) {
+            const candidate = enemies[e];
+            if (
+              candidate.uid === p.homingTargetUid &&
+              !candidate.isDying &&
+              candidate.hp > 0
+            ) {
+              target = candidate;
+              break;
+            }
+          }
+        }
+        if (!target) {
+          let bestDistSq = Infinity;
+          for (let e = 0; e < enemies.length; e++) {
+            const candidate = enemies[e];
+            if (candidate.isDying || candidate.hp <= 0) continue;
+            const dx = candidate.position.x - p.x;
+            const dy = candidate.position.y - p.y;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < bestDistSq) {
+              bestDistSq = dSq;
+              target = candidate;
+            }
+          }
+          p.homingTargetUid = target?.uid;
+        }
+        if (target) {
+          const desiredAngle = Math.atan2(
+            target.position.y - p.y,
+            target.position.x - p.x
+          );
+          let diff = desiredAngle - p.angle;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          const maxTurn = (p.homingTurnRate ?? 7) * dt;
+          p.angle += Math.max(-maxTurn, Math.min(maxTurn, diff));
+          const spd = p.speedMag ?? Math.hypot(p.vx, p.vy);
+          p.vx = Math.cos(p.angle) * spd;
+          p.vy = Math.sin(p.angle) * spd;
+        }
+      }
+
+      // Linear Projectiles
       p.x += p.vx * dt;
       p.y += p.vy * dt;
 
-      if (p.kind === 'rocket') {
+      if (p.kind === 'rocket' || p.kind === 'hunter_missile') {
         p.smokeCooldown = (p.smokeCooldown ?? 0) - dt;
         if (p.smokeCooldown <= 0) {
           p.smokeCooldown = 0.055;
@@ -1073,10 +1409,13 @@ export class CombatSystem {
             vx: -Math.cos(p.angle) * 16 + (Math.random() - 0.5) * 12,
             vy: -Math.sin(p.angle) * 16 + (Math.random() - 0.5) * 12,
             angle: p.angle,
-            size: 5.5,
-            life: 0.24,
-            maxLife: 0.24,
-            color: 'rgba(203, 213, 225, 0.4)',
+            size: p.kind === 'hunter_missile' ? 4.5 : 5.5,
+            life: 0.22,
+            maxLife: 0.22,
+            color:
+              p.kind === 'hunter_missile'
+                ? 'rgba(244, 114, 182, 0.35)'
+                : 'rgba(203, 213, 225, 0.4)',
           });
         }
       }
@@ -1124,6 +1463,7 @@ export class CombatSystem {
       if (hitEnemy) {
         p.hitEnemyUids.push(hitEnemy.uid);
 
+        // Explosive / AoE Projectile Skills
         if (p.kind === 'rocket' && p.aoeRadius > 0) {
           this.applyAreaDamage(
             p.x,
@@ -1140,13 +1480,212 @@ export class CombatSystem {
           continue;
         }
 
+        if (p.kind === 'hunter_missile') {
+          this.applyAreaDamage(
+            p.x,
+            p.y,
+            Math.max(28, p.aoeRadius),
+            p.damage,
+            enemySystem,
+            '#F472B6',
+            result,
+            'rocket'
+          );
+          p.active = false;
+          this.releaseProjectile(p);
+          continue;
+        }
+
+        if (p.kind === 'frost_shell') {
+          const radius = Math.max(40, p.aoeRadius);
+          this.spawnSkillExplosion(p.x, p.y, radius, '#38BDF8', 'frost');
+          for (let e = 0; e < enemies.length; e++) {
+            const target = enemies[e];
+            if (target.isDying || target.hp <= 0) continue;
+            const dx = target.position.x - p.x;
+            const dy = target.position.y - p.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist <= radius + target.radius) {
+              const inv = dist > 0.01 ? 1 / dist : 0;
+              enemySystem.applySlow(
+                target,
+                p.slowFactor ?? 0.3,
+                p.slowDuration ?? 2.4
+              );
+              this.applyDirectDamage(
+                target,
+                p.damage,
+                enemySystem,
+                '#7DD3FC',
+                result,
+                false,
+                dx * inv,
+                dy * inv
+              );
+            }
+          }
+          p.active = false;
+          this.releaseProjectile(p);
+          continue;
+        }
+
+        if (p.kind === 'acid_shell') {
+          const radius = Math.max(40, p.aoeRadius);
+          this.spawnSkillExplosion(p.x, p.y, radius, '#84CC16', 'acid');
+          for (let e = 0; e < enemies.length; e++) {
+            const target = enemies[e];
+            if (target.isDying || target.hp <= 0) continue;
+            const dx = target.position.x - p.x;
+            const dy = target.position.y - p.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist <= radius + target.radius) {
+              const inv = dist > 0.01 ? 1 / dist : 0;
+              enemySystem.applyAcid(
+                target,
+                p.acidDps ?? 10,
+                p.acidDuration ?? 3.2
+              );
+              this.applyDirectDamage(
+                target,
+                p.damage,
+                enemySystem,
+                '#A3E635',
+                result,
+                false,
+                dx * inv,
+                dy * inv
+              );
+            }
+          }
+          p.active = false;
+          this.releaseProjectile(p);
+          continue;
+        }
+
+        if (p.kind === 'plasma_orb') {
+          const radius = Math.max(55, p.aoeRadius);
+          this.applyAreaDamage(
+            p.x,
+            p.y,
+            radius,
+            p.damage,
+            enemySystem,
+            '#C084FC',
+            result,
+            'plasma'
+          );
+          if ((p.splitDamage ?? 0) > 0) {
+            this.scheduleDelayedStrike({
+              kind: 'plasma_vortex',
+              x: p.x,
+              y: p.y,
+              delaySec: 0.25,
+              radius: radius * 0.85,
+              damage: p.splitDamage ?? Math.round(p.damage * 0.3),
+              color: '#A855F7',
+              ticksRemaining: 2,
+              tickInterval: 0.28,
+            });
+          }
+          p.active = false;
+          this.releaseProjectile(p);
+          continue;
+        }
+
+        if (p.kind === 'cluster_bomb') {
+          this.applyAreaDamage(
+            p.x,
+            p.y,
+            44,
+            p.damage,
+            enemySystem,
+            '#F97316',
+            result,
+            'cannon'
+          );
+          const count = Math.max(2, Math.min(6, p.splitCount ?? 3));
+          const scatterR = p.splitRadius ?? 52;
+          const bombletDmg = p.splitDamage ?? Math.round(p.damage * 0.45);
+          for (let b = 0; b < count; b++) {
+            const ba = (b * Math.PI * 2) / count + (Math.random() - 0.5) * 0.45;
+            const dist = scatterR * (0.55 + Math.random() * 0.45);
+            const tx = Math.max(30, Math.min(bounds.width - 30, p.x + Math.cos(ba) * dist));
+            const ty = Math.max(30, Math.min(bounds.height - 30, p.y + Math.sin(ba) * dist));
+            this.spawnProjectile({
+              kind: 'cluster_bomblet',
+              x: p.x,
+              y: p.y,
+              angle: ba,
+              speed: 0,
+              damage: bombletDmg,
+              radius: 5,
+              aoeRadius: p.aoeRadius || 48,
+              targetX: tx,
+              targetY: ty,
+              flightDuration: 0.24 + (b % 3) * 0.05,
+              visualTier: p.visualTier,
+            });
+          }
+          p.active = false;
+          this.releaseProjectile(p);
+          continue;
+        }
+
+        if (p.kind === 'shrapnel_shell') {
+          const speedMag = Math.hypot(p.vx, p.vy) || 1;
+          this.applyDirectDamage(
+            hitEnemy,
+            p.damage,
+            enemySystem,
+            '#FDBA74',
+            result,
+            false,
+            p.vx / speedMag,
+            p.vy / speedMag
+          );
+          const shards = Math.max(3, Math.min(8, p.splitCount ?? 4));
+          const shardDmg = p.splitDamage ?? Math.max(4, Math.round(p.damage * 0.35));
+          const shardSpeed = p.splitRadius ?? 560;
+          for (let s = 0; s < shards; s++) {
+            const sa =
+              p.angle +
+              Math.PI +
+              ((s - (shards - 1) * 0.5) * (Math.PI * 1.4)) / shards +
+              (Math.random() - 0.5) * 0.25;
+            this.spawnProjectile({
+              kind: 'shrapnel_shard',
+              x: hitEnemy.position.x + Math.cos(sa) * (hitEnemy.radius + 4),
+              y: hitEnemy.position.y + Math.sin(sa) * (hitEnemy.radius + 4),
+              angle: sa,
+              speed: shardSpeed,
+              damage: shardDmg,
+              radius: 3.5,
+              ttl: 0.42,
+              pierceRemaining: 1,
+              visualTier: p.visualTier,
+            });
+          }
+          p.active = false;
+          this.releaseProjectile(p);
+          continue;
+        }
+
+        // Direct hit projectiles
         const dmgColor = p.isCrit
           ? '#FBBF24'
           : p.kind === 'rail_slug'
             ? '#67E8F9'
-            : p.kind === 'mg_bullet'
-              ? '#FDE047'
-              : '#FEF08A';
+            : p.kind === 'pierce_slug'
+              ? '#FDE68A'
+              : p.kind === 'ricochet_slug'
+                ? '#5EEAD4'
+                : p.kind === 'drone_bolt'
+                  ? '#FDE047'
+                  : p.kind === 'turret_round'
+                    ? '#6EE7B7'
+                    : p.kind === 'mg_bullet'
+                      ? '#FDE047'
+                      : '#FEF08A';
 
         const speedMag = Math.hypot(p.vx, p.vy) || 1;
         const hitDirX = p.vx / speedMag;
@@ -1163,7 +1702,7 @@ export class CombatSystem {
           hitDirY
         );
 
-        if (p.kind === 'rail_slug') {
+        if (p.kind === 'rail_slug' || p.kind === 'pierce_slug') {
           this.pushEffect({
             kind: 'hit_ring',
             x: hitEnemy.position.x,
@@ -1176,8 +1715,61 @@ export class CombatSystem {
             size: 16,
             life: 0.14,
             maxLife: 0.14,
-            color: '#67E8F9',
+            color: p.kind === 'rail_slug' ? '#67E8F9' : '#FCD34D',
           });
+        }
+
+        // Ricochet bounce logic
+        if (p.kind === 'ricochet_slug' && (p.ricochetRemaining ?? 0) > 0) {
+          const bounceRangeSq =
+            (p.ricochetRange ?? 185) * (p.ricochetRange ?? 185);
+          let nextTarget: EnemyInstance | null = null;
+          let bestDistSq = Infinity;
+          for (let e = 0; e < enemies.length; e++) {
+            const candidate = enemies[e];
+            if (candidate.isDying || candidate.hp <= 0) continue;
+            if (p.hitEnemyUids.includes(candidate.uid)) continue;
+            const dx = candidate.position.x - hitEnemy.position.x;
+            const dy = candidate.position.y - hitEnemy.position.y;
+            const dSq = dx * dx + dy * dy;
+            if (dSq <= bounceRangeSq && dSq < bestDistSq) {
+              bestDistSq = dSq;
+              nextTarget = candidate;
+            }
+          }
+
+          if (nextTarget) {
+            p.ricochetRemaining = (p.ricochetRemaining ?? 1) - 1;
+            p.damage = Math.max(
+              1,
+              Math.round(p.damage * (p.ricochetRetention ?? 0.88))
+            );
+            const nextAngle = Math.atan2(
+              nextTarget.position.y - p.y,
+              nextTarget.position.x - p.x
+            );
+            const spd = p.speedMag ?? speedMag;
+            p.angle = nextAngle;
+            p.vx = Math.cos(nextAngle) * spd;
+            p.vy = Math.sin(nextAngle) * spd;
+            p.ttl = Math.max(p.ttl, 0.55);
+            this.pushEffect({
+              kind: 'tracer',
+              x: hitEnemy.position.x,
+              y: hitEnemy.position.y,
+              tx: nextTarget.position.x,
+              ty: nextTarget.position.y,
+              vx: 0,
+              vy: 0,
+              angle: nextAngle,
+              size: 1.8,
+              life: 0.12,
+              maxLife: 0.12,
+              color: 'rgba(94, 234, 212, 0.65)',
+            });
+            this.projectiles[writeProj++] = p;
+            continue;
+          }
         }
 
         p.pierceRemaining--;
@@ -1235,6 +1827,212 @@ export class CombatSystem {
       this.mines[writeMine++] = m;
     }
     this.mines.length = writeMine;
+
+    // 2b. Update Deployed Sentry Turrets
+    let writeTurret = 0;
+    for (let i = 0; i < this.turrets.length; i++) {
+      const turret = this.turrets[i];
+      if (playerDefeatedDuringStep) continue;
+      turret.ttl -= dt;
+      if (turret.ttl <= 0) continue;
+
+      turret.fireCooldown -= dt;
+      const rangeSq = turret.range * turret.range;
+      let target: EnemyInstance | null = null;
+      let bestDistSq = Infinity;
+      for (let e = 0; e < enemies.length; e++) {
+        const enemy = enemies[e];
+        if (enemy.isDying || enemy.hp <= 0) continue;
+        const dx = enemy.position.x - turret.x;
+        const dy = enemy.position.y - turret.y;
+        const dSq = dx * dx + dy * dy;
+        if (dSq <= rangeSq && dSq < bestDistSq) {
+          bestDistSq = dSq;
+          target = enemy;
+        }
+      }
+
+      if (target) {
+        turret.angle = Math.atan2(
+          target.position.y - turret.y,
+          target.position.x - turret.x
+        );
+        if (turret.fireCooldown <= 0) {
+          turret.fireCooldown = turret.fireInterval;
+          this.spawnProjectile({
+            kind: 'turret_round',
+            x: turret.x + Math.cos(turret.angle) * 16,
+            y: turret.y + Math.sin(turret.angle) * 16,
+            angle: turret.angle,
+            speed: 700,
+            damage: turret.damage,
+            radius: 4,
+            ttl: 0.9,
+            pierceRemaining: 1,
+            visualTier: turret.tier,
+          });
+        }
+      }
+      this.turrets[writeTurret++] = turret;
+    }
+    this.turrets.length = writeTurret;
+
+    // 2c. Update Combat Drone Squadron
+    let writeDrone = 0;
+    for (let i = 0; i < this.drones.length; i++) {
+      const drone = this.drones[i];
+      if (playerDefeatedDuringStep) continue;
+      drone.ttl -= dt;
+      if (drone.ttl <= 0) continue;
+
+      drone.orbitAngle += drone.orbitSpeed * dt;
+      if (tankPos) {
+        drone.x = tankPos.x + Math.cos(drone.orbitAngle) * drone.orbitRadius;
+        drone.y = tankPos.y + Math.sin(drone.orbitAngle) * drone.orbitRadius;
+      }
+
+      drone.fireCooldown -= dt;
+      const rangeSq = drone.range * drone.range;
+      let target: EnemyInstance | null = null;
+      let bestDistSq = Infinity;
+      for (let e = 0; e < enemies.length; e++) {
+        const enemy = enemies[e];
+        if (enemy.isDying || enemy.hp <= 0) continue;
+        const dx = enemy.position.x - drone.x;
+        const dy = enemy.position.y - drone.y;
+        const dSq = dx * dx + dy * dy;
+        if (dSq <= rangeSq && dSq < bestDistSq) {
+          bestDistSq = dSq;
+          target = enemy;
+        }
+      }
+
+      if (target) {
+        drone.aimAngle = Math.atan2(
+          target.position.y - drone.y,
+          target.position.x - drone.x
+        );
+        if (drone.fireCooldown <= 0) {
+          drone.fireCooldown = drone.fireInterval;
+          this.spawnProjectile({
+            kind: 'drone_bolt',
+            x: drone.x + Math.cos(drone.aimAngle) * 10,
+            y: drone.y + Math.sin(drone.aimAngle) * 10,
+            angle: drone.aimAngle,
+            speed: 760,
+            damage: drone.damage,
+            radius: 3.8,
+            ttl: 0.85,
+            pierceRemaining: 1,
+            visualTier: drone.tier,
+          });
+        }
+      } else {
+        drone.aimAngle = drone.orbitAngle + Math.PI / 2;
+      }
+
+      this.drones[writeDrone++] = drone;
+    }
+    this.drones.length = writeDrone;
+
+    // 2d. Update Delayed Orbital Strikes, Thunderstorm Bolts, and Plasma Vortices
+    let writeStrike = 0;
+    for (let i = 0; i < this.delayedStrikes.length; i++) {
+      const s = this.delayedStrikes[i];
+      if (playerDefeatedDuringStep) continue;
+      s.delayRemaining -= dt;
+      if (s.delayRemaining <= 0) {
+        if (s.kind === 'orbital') {
+          this.pushEffect({
+            kind: 'orbital_beam',
+            x: s.x,
+            y: s.y,
+            tx: s.x,
+            ty: s.y,
+            vx: 0,
+            vy: 0,
+            angle: 0,
+            size: s.radius * 0.42,
+            life: 0.36,
+            maxLife: 0.36,
+            color: s.color,
+            secondaryColor: '#ECFEFF',
+          });
+          this.applyAreaDamage(
+            s.x,
+            s.y,
+            s.radius,
+            s.damage,
+            enemySystem,
+            s.color,
+            result,
+            'orbital'
+          );
+          continue;
+        }
+
+        if (s.kind === 'thunder') {
+          this.spawnSkyBolt(s.x, s.y, s.color);
+          this.applyAreaDamage(
+            s.x,
+            s.y,
+            s.radius,
+            s.damage,
+            enemySystem,
+            s.color,
+            result,
+            'rocket'
+          );
+          continue;
+        }
+
+        if (s.kind === 'plasma_vortex') {
+          this.applyAreaDamage(
+            s.x,
+            s.y,
+            s.radius,
+            s.damage,
+            enemySystem,
+            s.color,
+            result,
+            'plasma'
+          );
+          const left = (s.ticksRemaining ?? 1) - 1;
+          if (left > 0) {
+            s.ticksRemaining = left;
+            s.delayRemaining = s.tickInterval ?? 0.28;
+            this.delayedStrikes[writeStrike++] = s;
+          }
+          continue;
+        }
+      }
+      this.delayedStrikes[writeStrike++] = s;
+    }
+    this.delayedStrikes.length = writeStrike;
+
+    // 2e. Process Acid Shells Corrosive DoT Ticks on Enemies
+    if (!playerDefeatedDuringStep) {
+      for (let e = 0; e < enemies.length; e++) {
+        const enemy = enemies[e];
+        if (enemy.isDying || enemy.hp <= 0) continue;
+        if (!enemy.acidTimer || enemy.acidTimer <= 0 || !enemy.acidDps) continue;
+
+        enemy.acidTimer = Math.max(0, enemy.acidTimer - dt);
+        enemy.acidTickTimer = (enemy.acidTickTimer ?? 0.45) - dt;
+        if (enemy.acidTickTimer <= 0) {
+          enemy.acidTickTimer = 0.45;
+          const tickDamage = Math.max(1, Math.round(enemy.acidDps * 0.45));
+          this.applyDirectDamage(
+            enemy,
+            tickDamage,
+            enemySystem,
+            '#A3E635',
+            result,
+            false
+          );
+        }
+      }
+    }
 
     // 3. Update & Compact Visual Effects (pooled)
     let writeFx = 0;
@@ -1417,6 +2215,7 @@ export class CombatSystem {
   private pushParticle(
     params: Omit<VisualEffect, 'tx' | 'ty'>
   ): void {
+    if (this.performanceMode) return;
     if (this.particleCount >= MAX_LIGHTWEIGHT_PARTICLES) {
       this.evictOldestOfKind(['smoke', 'debris']);
     }
@@ -1428,11 +2227,27 @@ export class CombatSystem {
   }
 
   private pushEffect(input: VisualEffect): void {
-    if (input.kind === 'damage_text' && this.damageTextCount >= MAX_DAMAGE_TEXTS) {
+    if (this.performanceMode) {
+      if (
+        input.kind === 'smoke' ||
+        input.kind === 'debris' ||
+        input.kind === 'hit_ring' ||
+        input.kind === 'muzzle' ||
+        (input.kind === 'impact' && input.size <= 12)
+      ) {
+        return;
+      }
+    }
+
+    const damageTextCap = this.performanceMode ? 10 : MAX_DAMAGE_TEXTS;
+    if (input.kind === 'damage_text' && this.damageTextCount >= damageTextCap) {
       this.evictOldestOfKind(['damage_text']);
     }
 
-    if (this.effects.length >= COMBAT_CONFIG.maxVisualEffects) {
+    const effectsCap = this.performanceMode
+      ? Math.floor(COMBAT_CONFIG.maxVisualEffects * 0.55)
+      : COMBAT_CONFIG.maxVisualEffects;
+    if (this.effects.length >= effectsCap) {
       const evicted = this.evictOldestOfKind(['smoke', 'debris', 'damage_text', 'impact']);
       if (!evicted) {
         const oldest = this.effects.shift();

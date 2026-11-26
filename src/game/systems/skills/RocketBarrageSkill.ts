@@ -50,8 +50,8 @@ export class RocketBarrageSkill implements CombatSkillModule {
 
       ctx.combat.spawnProjectile({
         kind: 'rocket',
-        x: ctx.tank.position.x + Math.cos(angle) * 26,
-        y: ctx.tank.position.y + Math.sin(angle) * 26,
+        x: ctx.tank.position.x + Math.cos(angle) * 44,
+        y: ctx.tank.position.y + Math.sin(angle) * 44,
         angle,
         speed: spec.speed,
         damage: applySkillDamageBonus(spec.damage, ctx, damageMult),

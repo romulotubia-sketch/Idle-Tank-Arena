@@ -1,4 +1,5 @@
 import { AutoForgeSystem } from './AutoForgeSystem';
+import { SkillUpgradeSystem } from './SkillUpgradeSystem';
 import { playgamaBridge } from '../../platform/playgamaBridge';
 import {
   EQUIPMENT_INVENTORY_CAPACITY,
@@ -11,6 +12,8 @@ import {
 } from '../constants';
 import {
   CurrencyBalances,
+  GraphicsQuality,
+  SavedMonetizationState,
   SavePayload,
   SaveStatusNotice,
   TankStats,
@@ -45,6 +48,15 @@ function sanitizePositiveNumber(val: unknown, fallback: number): number {
   return typeof val === 'number' && Number.isFinite(val) && val >= 0
     ? val
     : fallback;
+}
+
+function sanitizeUnitVolume(val: unknown, fallback: number): number {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
+  return Math.max(0, Math.min(1, Math.round(val * 100) / 100));
+}
+
+function sanitizeGraphicsQuality(val: unknown): GraphicsQuality {
+  return val === 'low' ? 'low' : 'high';
 }
 
 function sanitizeWave(raw: unknown): WaveState | null {
@@ -266,6 +278,67 @@ export class SaveSystem {
         ? { entries: collectionRaw.entries }
         : undefined;
 
+    const sanitizedSkillSlots = SkillUpgradeSystem.sanitizeSavedSkillSlots(
+      parsed.skillSlots
+    );
+    const sanitizedPendingSkills = SkillUpgradeSystem.sanitizePendingSkills(
+      parsed.pendingSkills
+    );
+    const autoUpgradeRaw = isPlainObject(parsed.autoUpgrade)
+      ? parsed.autoUpgrade
+      : undefined;
+    const sanitizedAutoUpgrade = autoUpgradeRaw
+      ? {
+          enabled:
+            typeof autoUpgradeRaw.enabled === 'boolean'
+              ? autoUpgradeRaw.enabled
+              : true,
+          settings: SkillUpgradeSystem.sanitizeSettings(autoUpgradeRaw.settings),
+          totalAutoUpgrades: sanitizeNonNegativeInt(
+            autoUpgradeRaw.totalAutoUpgrades,
+            0
+          ),
+        }
+      : undefined;
+
+    const monetizationRaw = isPlainObject(parsed.monetization)
+      ? parsed.monetization
+      : undefined;
+    let sanitizedMonetization: SavedMonetizationState | undefined;
+    if (monetizationRaw && typeof monetizationRaw.dayKey === 'string') {
+      const dailyRaw = isPlainObject(monetizationRaw.dailyUses)
+        ? monetizationRaw.dailyUses
+        : {};
+      const cdRaw = isPlainObject(monetizationRaw.cooldownRemainingSec)
+        ? monetizationRaw.cooldownRemainingSec
+        : {};
+      sanitizedMonetization = {
+        dayKey: monetizationRaw.dayKey.slice(0, 16),
+        dailyUses: {
+          offline_reward_bonus: sanitizeNonNegativeInt(
+            dailyRaw.offline_reward_bonus,
+            0
+          ),
+          optional_coin_bonus: sanitizeNonNegativeInt(
+            dailyRaw.optional_coin_bonus,
+            0
+          ),
+          temporary_boost: sanitizeNonNegativeInt(dailyRaw.temporary_boost, 0),
+        },
+        cooldownRemainingSec: {
+          offline_reward_bonus: sanitizeNonNegativeInt(
+            cdRaw.offline_reward_bonus,
+            0
+          ),
+          optional_coin_bonus: sanitizeNonNegativeInt(
+            cdRaw.optional_coin_bonus,
+            0
+          ),
+          temporary_boost: sanitizeNonNegativeInt(cdRaw.temporary_boost, 0),
+        },
+      };
+    }
+
     return {
       version: SAVE_VERSION,
       savedAt,
@@ -279,8 +352,18 @@ export class SaveSystem {
       equipment: sanitizedEquipment as SavePayload['equipment'],
       forge: sanitizedForge as SavePayload['forge'],
       skillCollection: sanitizedCollection as SavePayload['skillCollection'],
+      skillSlots: sanitizedSkillSlots,
+      pendingSkills:
+        sanitizedPendingSkills.length > 0 ? sanitizedPendingSkills : undefined,
+      autoUpgrade: sanitizedAutoUpgrade,
+      monetization: sanitizedMonetization,
       soundEnabled:
         typeof parsed.soundEnabled === 'boolean' ? parsed.soundEnabled : true,
+      soundVolume: sanitizeUnitVolume(parsed.soundVolume, 0.75),
+      musicEnabled:
+        typeof parsed.musicEnabled === 'boolean' ? parsed.musicEnabled : true,
+      musicVolume: sanitizeUnitVolume(parsed.musicVolume, 0.4),
+      graphicsQuality: sanitizeGraphicsQuality(parsed.graphicsQuality),
       showRangeRing:
         typeof parsed.showRangeRing === 'boolean' ? parsed.showRangeRing : true,
     };

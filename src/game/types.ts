@@ -50,6 +50,11 @@ export interface PlayerTankState {
   bodyRecoilX: number;
   bodyRecoilY: number;
   isMoving: boolean;
+  shieldHp?: number;
+  shieldMaxHp?: number;
+  shieldTimer?: number;
+  overdriveTimer?: number;
+  overdriveFireRateBonus?: number;
   stats: TankStats;
 }
 
@@ -113,7 +118,13 @@ export interface EnemyInstance {
   deathDuration: number;
   // Smooth hysteresis so enemies don't jitter at range edge
   inAttackHold?: boolean;
-    // Boss distinct encounter & attack pattern state
+  // Status effects (Frost Cannon slow, Acid Shells DoT)
+  slowTimer?: number;
+  slowFactor?: number;
+  acidTimer?: number;
+  acidDps?: number;
+  acidTickTimer?: number;
+  // Boss distinct encounter & attack pattern state
   introTimer?: number;
   introDuration?: number;
   burstCooldown?: number;
@@ -135,6 +146,18 @@ export type ProjectileKind =
   | 'rocket'
   | 'mortar_shell'
   | 'rail_slug'
+  | 'pierce_slug'
+  | 'ricochet_slug'
+  | 'frost_shell'
+  | 'acid_shell'
+  | 'shrapnel_shell'
+  | 'shrapnel_shard'
+  | 'cluster_bomb'
+  | 'cluster_bomblet'
+  | 'hunter_missile'
+  | 'plasma_orb'
+  | 'turret_round'
+  | 'drone_bolt'
   | 'enemy_artillery_shell'
   | 'enemy_boss_shell';
 
@@ -159,13 +182,27 @@ export interface ProjectileInstance {
   isCrit?: boolean;
   isEnemyProjectile?: boolean;
   smokeCooldown?: number;
-  // Used by arcing mortar shells
+  // Used by arcing mortar shells & cluster bomblets
   startX?: number;
   startY?: number;
   targetX?: number;
   targetY?: number;
   flightElapsed?: number;
   flightDuration?: number;
+  // Used by Ricochet, Hunter Missiles, Frost, Acid, Shrapnel, Cluster, Plasma
+  ricochetRemaining?: number;
+  ricochetRange?: number;
+  ricochetRetention?: number;
+  homingTurnRate?: number;
+  homingTargetUid?: number;
+  speedMag?: number;
+  slowFactor?: number;
+  slowDuration?: number;
+  acidDps?: number;
+  acidDuration?: number;
+  splitCount?: number;
+  splitDamage?: number;
+  splitRadius?: number;
 }
 
 export interface LandmineInstance {
@@ -180,6 +217,51 @@ export interface LandmineInstance {
   active: boolean;
 }
 
+export interface DeployableTurret {
+  uid: number;
+  x: number;
+  y: number;
+  angle: number;
+  damage: number;
+  range: number;
+  fireInterval: number;
+  fireCooldown: number;
+  ttl: number;
+  maxTtl: number;
+  tier: number;
+}
+
+export interface CombatDrone {
+  uid: number;
+  x: number;
+  y: number;
+  orbitAngle: number;
+  orbitRadius: number;
+  orbitSpeed: number;
+  aimAngle: number;
+  damage: number;
+  range: number;
+  fireInterval: number;
+  fireCooldown: number;
+  ttl: number;
+  maxTtl: number;
+  tier: number;
+}
+
+export interface DelayedStrike {
+  uid: number;
+  kind: 'orbital' | 'thunder' | 'plasma_vortex';
+  x: number;
+  y: number;
+  delayRemaining: number;
+  totalDelay: number;
+  radius: number;
+  damage: number;
+  ticksRemaining?: number;
+  tickInterval?: number;
+  color: string;
+}
+
 export type VisualEffectKind =
   | 'muzzle'
   | 'impact'
@@ -187,6 +269,11 @@ export type VisualEffectKind =
   | 'blast_ring'
   | 'tracer'
   | 'rail_beam'
+  | 'laser_beam'
+  | 'orbital_beam'
+  | 'sky_bolt'
+  | 'shockwave_ring'
+  | 'shield_pulse'
   | 'lightning_arc'
   | 'flame_cone'
   | 'smoke'
@@ -199,6 +286,10 @@ export type ExplosionStyle =
   | 'rocket'
   | 'mortar'
   | 'mine'
+  | 'frost'
+  | 'acid'
+  | 'plasma'
+  | 'orbital'
   | 'enemy'
   | 'boss';
 
@@ -242,9 +333,25 @@ export type SkillId =
   | 'railgun'
   | 'flame_thrower'
   | 'tesla'
-  | 'landmines';
+  | 'landmines'
+  | 'piercing_shot'
+  | 'shockwave'
+  | 'ricochet'
+  | 'frost_cannon'
+  | 'acid_shells'
+  | 'shrapnel_burst'
+  | 'shield_pulse'
+  | 'cluster_bombs'
+  | 'hunter_missiles'
+  | 'gatling_overdrive'
+  | 'laser_array'
+  | 'plasma_cannon'
+  | 'sentry_turret'
+  | 'drone_squadron'
+  | 'orbital_strike'
+  | 'thunderstorm';
 
-export type SkillRarity = 'common' | 'rare' | 'epic' | 'legendary';
+export type SkillRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 
 export interface SkillDefinition {
   id: SkillId;
@@ -271,9 +378,53 @@ export interface SummonRule {
   maxSlots: number;
 }
 
-export interface MergeRule {
-  requiredTierMatch: boolean;
-  maxTier: number;
+export type SkillUpgradePriorityMode = 'custom_priority' | 'lowest_level';
+
+export type MaxLevelDuplicateBehavior =
+  | 'convert_fragments'
+  | 'refund_coins'
+  | 'store_pending';
+
+export interface AutoUpgradeSettings {
+  priorityMode: SkillUpgradePriorityMode;
+  ignoreMaxLevel: boolean;
+  maxLevelOverflow: MaxLevelDuplicateBehavior;
+  enabledSkills: Record<SkillId, boolean>;
+  skillPriorities: SkillId[];
+}
+
+export interface PendingSkillEntry {
+  skillId: SkillId;
+  copies: number;
+  addedAt: number;
+}
+
+export interface SavedSkillSlot {
+  index: number;
+  skillId: SkillId | null;
+  level: number;
+}
+
+export interface AutoUpgradeEvent {
+  id: number;
+  kind: 'upgraded' | 'overflow';
+  skillId: SkillId;
+  previousLevel?: number;
+  newLevel?: number;
+  message: string;
+}
+
+export interface AutoUpgradeState {
+  enabled: boolean;
+  settings: AutoUpgradeSettings;
+  totalAutoUpgrades: number;
+  lastEvent: AutoUpgradeEvent | null;
+}
+
+export interface SavedAutoUpgradeState {
+  enabled: boolean;
+  settings: AutoUpgradeSettings;
+  totalAutoUpgrades: number;
 }
 
 export interface SkillCollectionEntry {
@@ -555,6 +706,70 @@ export interface InventorySlot {
   quantity: number;
 }
 
+export type GraphicsQuality = 'high' | 'low';
+
+export interface GameSettingsState {
+  soundEnabled: boolean;
+  soundVolume: number;
+  musicEnabled: boolean;
+  musicVolume: number;
+  graphicsQuality: GraphicsQuality;
+  showRangeRing: boolean;
+}
+
+export type MonetizationOfferId =
+  | 'offline_reward_bonus'
+  | 'optional_coin_bonus'
+  | 'temporary_boost';
+
+export interface ActiveTemporaryBoostState {
+  active: boolean;
+  remainingSec: number;
+  totalSec: number;
+  attackPowerMultiplier: number;
+  coinGainMultiplier: number;
+}
+
+export interface OfflineBonusPreview {
+  enabled: boolean;
+  sdkConnected: boolean;
+  bonusPct: number;
+  bonusCoins: number;
+  totalWithBonus: number;
+  dailyRemaining: number;
+  dailyLimit: number;
+}
+
+export interface MonetizationOfferStatus {
+  id: MonetizationOfferId;
+  label: string;
+  shortDesc: string;
+  enabled: boolean;
+  sdkConnected: boolean;
+  dailyUsed: number;
+  dailyLimit: number;
+  dailyRemaining: number;
+  cooldownSec: number;
+  cooldownRemainingSec: number;
+  canClaim: boolean;
+}
+
+export interface MonetizationSnapshot {
+  providerName: 'Playgama';
+  sdkConnected: boolean;
+  dayKey: string;
+  activeBoost: ActiveTemporaryBoostState;
+  optionalCoinBonusPreview: number;
+  offlineBonusPreview: OfflineBonusPreview | null;
+  offers: Record<MonetizationOfferId, MonetizationOfferStatus>;
+}
+
+export interface SavedMonetizationState {
+  dayKey: string;
+  dailyUses: Partial<Record<MonetizationOfferId, number>>;
+  cooldownRemainingSec?: Partial<Record<MonetizationOfferId, number>>;
+}
+
 export interface SavePayload {
   version: number;
   savedAt: number;
@@ -566,7 +781,15 @@ export interface SavePayload {
   equipment?: SavedEquipmentState;
   forge?: SavedForgeState;
   skillCollection?: SavedSkillCollectionState;
+  skillSlots?: SavedSkillSlot[];
+  pendingSkills?: PendingSkillEntry[];
+  autoUpgrade?: SavedAutoUpgradeState;
+  monetization?: SavedMonetizationState;
   soundEnabled: boolean;
+  soundVolume?: number;
+  musicEnabled?: boolean;
+  musicVolume?: number;
+  graphicsQuality?: GraphicsQuality;
   showRangeRing: boolean;
 }
 
@@ -616,6 +839,9 @@ export interface GameHudSnapshot {
   battle: BattleSummary;
   upgrades: UpgradeEntry[];
   skillSlots: SkillSlot[];
+  pendingSkills: PendingSkillEntry[];
+  pendingSkillCount: number;
+  autoUpgrade: AutoUpgradeState;
   skillCollection: SkillCollectionEntry[];
   unlockedSkillCount: number;
   equipmentSlots: Record<EquipmentSlotType, EquipmentItem | null>;
@@ -628,8 +854,10 @@ export interface GameHudSnapshot {
   inventoryCapacity: number;
   inventorySlots: InventorySlot[];
   showRangeRing: boolean;
+  settings: GameSettingsState;
   summonCost: number;
   hasVacantSkillSlot: boolean;
   offlineReward: OfflineRewardSummary | null;
+  monetization: MonetizationSnapshot;
   saveNotice: SaveStatusNotice | null;
 }

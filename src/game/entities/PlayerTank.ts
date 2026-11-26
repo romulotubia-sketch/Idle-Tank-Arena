@@ -14,6 +14,11 @@ export function createPlayerTank(centerX: number, centerY: number): PlayerTankSt
     bodyRecoilX: 0,
     bodyRecoilY: 0,
     isMoving: false,
+    shieldHp: 0,
+    shieldMaxHp: 0,
+    shieldTimer: 0,
+    overdriveTimer: 0,
+    overdriveFireRateBonus: 0,
     stats: { ...INITIAL_TANK_STATS },
   };
 }

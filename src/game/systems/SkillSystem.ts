@@ -1,5 +1,10 @@
-import { MAX_SKILL_LEVEL, SKILL_SLOT_COUNT } from '../constants';
-import { SkillDefinition, SkillId, SkillSlot } from '../types';
+import { ALL_SKILL_IDS, MAX_SKILL_LEVEL, SKILL_SLOT_COUNT } from '../constants';
+import {
+  SavedSkillSlot,
+  SkillDefinition,
+  SkillId,
+  SkillSlot,
+} from '../types';
 import { SkillCollectionSystem } from './SkillCollectionSystem';
 import { SkillExecutionContext } from './skills/BaseSkill';
 import { skillRegistry } from './skills/SkillRegistry';
@@ -46,6 +51,16 @@ export class SkillSystem {
     for (let i = 0; i < this.slots.length; i++) {
       const slot = this.slots[i];
       if (slot.unlocked && slot.skillId === null) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  findSlotIndexBySkillId(skillId: SkillId): number {
+    for (let i = 0; i < this.slots.length; i++) {
+      const slot = this.slots[i];
+      if (slot.unlocked && slot.skillId === skillId) {
         return i;
       }
     }
@@ -108,6 +123,42 @@ export class SkillSystem {
     return true;
   }
 
+  replaceSlotSkill(
+    slotIndex: number,
+    skillId: SkillId,
+    level = 1,
+    collection?: SkillCollectionSystem
+  ): { success: boolean; previousSkillId: SkillId | null; previousLevel: number } {
+    const slot = this.slots[slotIndex];
+    if (!slot || !slot.unlocked) {
+      return { success: false, previousSkillId: null, previousLevel: 0 };
+    }
+    // Prevent duplicating an already-equipped skill into another slot
+    const existingIndex = this.findSlotIndexBySkillId(skillId);
+    if (existingIndex !== -1 && existingIndex !== slotIndex) {
+      return { success: false, previousSkillId: null, previousLevel: 0 };
+    }
+    const module = skillRegistry.getModule(skillId);
+    if (!module) {
+      return { success: false, previousSkillId: null, previousLevel: 0 };
+    }
+
+    const previousSkillId = slot.skillId;
+    const previousLevel = slot.level;
+    const clampedLevel = Math.max(1, Math.min(MAX_SKILL_LEVEL, Math.floor(level)));
+    const cd = module.getCooldown(
+      clampedLevel,
+      collection?.getComputedBonuses(skillId)
+    );
+
+    slot.skillId = skillId;
+    slot.level = clampedLevel;
+    slot.tier = clampedLevel;
+    slot.cooldownTotal = cd;
+    slot.cooldownRemaining = Math.min(0.2, cd);
+    return { success: true, previousSkillId, previousLevel };
+  }
+
   refreshCooldowns(collection: SkillCollectionSystem): void {
     for (let i = 0; i < this.slots.length; i++) {
       const slot = this.slots[i];
@@ -149,6 +200,56 @@ export class SkillSystem {
         : 0;
       slot.cooldownTotal = cd;
       slot.cooldownRemaining = cd * (0.15 + i * 0.12);
+    }
+  }
+
+  exportState(): SavedSkillSlot[] {
+    return this.slots.map((slot) => ({
+      index: slot.index,
+      skillId: slot.skillId,
+      level: slot.level,
+    }));
+  }
+
+  loadState(
+    saved?: SavedSkillSlot[],
+    collection?: SkillCollectionSystem
+  ): void {
+    this.resetToEmpty();
+    if (!Array.isArray(saved)) return;
+
+    const validIds = new Set<SkillId>(ALL_SKILL_IDS);
+    const seenSkills = new Set<SkillId>();
+
+    for (let i = 0; i < saved.length; i++) {
+      const raw = saved[i];
+      if (!raw || typeof raw.index !== 'number' || !Number.isInteger(raw.index)) {
+        continue;
+      }
+      if (raw.index < 0 || raw.index >= this.slots.length) continue;
+      if (!raw.skillId || !validIds.has(raw.skillId)) continue;
+      if (seenSkills.has(raw.skillId)) continue;
+
+      const cleanLevel =
+        typeof raw.level === 'number' && Number.isFinite(raw.level)
+          ? Math.max(1, Math.min(MAX_SKILL_LEVEL, Math.floor(raw.level)))
+          : 1;
+
+      const slot = this.slots[raw.index];
+      if (!slot || !slot.unlocked) continue;
+      const module = skillRegistry.getModule(raw.skillId);
+      if (!module) continue;
+
+      seenSkills.add(raw.skillId);
+      slot.skillId = raw.skillId;
+      slot.level = cleanLevel;
+      slot.tier = cleanLevel;
+      const cd = module.getCooldown(
+        cleanLevel,
+        collection?.getComputedBonuses(raw.skillId)
+      );
+      slot.cooldownTotal = cd;
+      slot.cooldownRemaining = cd * (0.15 + raw.index * 0.12);
     }
   }
 

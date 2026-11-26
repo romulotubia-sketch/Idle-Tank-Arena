@@ -52,8 +52,8 @@ export class FlameThrowerSkill implements CombatSkillModule {
       primary.position.y - ctx.tank.position.y,
       primary.position.x - ctx.tank.position.x
     );
-    const nozzleX = ctx.tank.position.x + Math.cos(aimAngle) * 28;
-    const nozzleY = ctx.tank.position.y + Math.sin(aimAngle) * 28;
+    const nozzleX = ctx.tank.position.x + Math.cos(aimAngle) * 46;
+    const nozzleY = ctx.tank.position.y + Math.sin(aimAngle) * 46;
 
     ctx.combat.spawnFlameCone(
       nozzleX,

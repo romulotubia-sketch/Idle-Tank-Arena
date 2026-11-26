@@ -1,7 +1,11 @@
 import { ARENA_BOUNDS } from '../constants';
 import {
   ArenaBounds,
+  CombatDrone,
+  DelayedStrike,
+  DeployableTurret,
   EnemyInstance,
+  GraphicsQuality,
   LandmineInstance,
   PlayerTankState,
   ProjectileInstance,
@@ -15,10 +19,14 @@ export interface RenderSceneInput {
   enemies: readonly EnemyInstance[];
   projectiles: readonly ProjectileInstance[];
   mines: readonly LandmineInstance[];
+  turrets?: readonly DeployableTurret[];
+  drones?: readonly CombatDrone[];
+  delayedStrikes?: readonly DelayedStrike[];
   effects: readonly VisualEffect[];
   showRangeRing: boolean;
   isActive: boolean;
   reducedMotion: boolean;
+  graphicsQuality?: GraphicsQuality;
   damageVignetteAlpha?: number;
 }
 
@@ -37,6 +45,10 @@ function hash01(seed: number, step: number): number {
 
 const TERRAIN_EXTENT_X = 1960;
 const TERRAIN_EXTENT_Y = 1220;
+const PLAYER_TANK_VISUAL_SCALE = 1.5;
+const DEPLOYMENT_PAD_SCALE = 1.45;
+const ENEMY_VISUAL_SCALE = 1.24;
+const BOSS_VISUAL_SCALE = 1.52;
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D | null = null;
@@ -46,6 +58,7 @@ export class Renderer {
   private viewportWidth = 0;
   private viewportHeight = 0;
   private dpr = 1;
+  private graphicsQuality: GraphicsQuality = 'high';
 
   constructor(bounds: ArenaBounds = ARENA_BOUNDS) {
     this.camera = new Camera(bounds);
@@ -53,6 +66,18 @@ export class Renderer {
 
   getCamera(): Camera {
     return this.camera;
+  }
+
+  setGraphicsQuality(
+    quality: GraphicsQuality,
+    canvas?: HTMLCanvasElement | null
+  ): void {
+    const normalized: GraphicsQuality = quality === 'low' ? 'low' : 'high';
+    if (this.graphicsQuality === normalized) return;
+    this.graphicsQuality = normalized;
+    if (canvas) {
+      this.resize(canvas);
+    }
   }
 
   attach(canvas: HTMLCanvasElement): void {
@@ -73,7 +98,10 @@ export class Renderer {
 
   resize(canvas: HTMLCanvasElement): void {
     const rect = canvas.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr =
+      this.graphicsQuality === 'low'
+        ? 1
+        : Math.min(window.devicePixelRatio || 1, 2);
     const width = Math.max(1, Math.floor(rect.width));
     const height = Math.max(1, Math.floor(rect.height));
 
@@ -100,10 +128,15 @@ export class Renderer {
       enemies,
       projectiles,
       mines,
+      turrets = [],
+      drones = [],
+      delayedStrikes = [],
       effects,
       showRangeRing,
+      graphicsQuality,
       damageVignetteAlpha = 0,
     } = scene;
+    const isLowQuality = (graphicsQuality ?? this.graphicsQuality) === 'low';
 
     ctx.save();
     ctx.scale(this.dpr, this.dpr);
@@ -130,18 +163,21 @@ export class Renderer {
       this.drawRangeRing(ctx, tank.position.x, tank.position.y, tank.stats.range);
     }
 
-    // Layer 3: Ground mines, Mortar reticles/arcs & Boss Siege Telegraphs
-    this.drawMines(ctx, mines);
+    // Layer 3: Ground mines, Mortar reticles/arcs, Delayed strikes & Boss Siege Telegraphs
+    this.drawMines(ctx, mines, isLowQuality);
+    this.drawDelayedStrikes(ctx, delayedStrikes);
     this.drawMortarReticles(ctx, projectiles);
     this.drawBossTelegraphs(ctx, enemies);
 
-    // Layer 4: Enemies & Player Tank
+    // Layer 4: Enemies, Sentry Turrets, Player Tank & Combat Drones
     this.drawEnemies(ctx, enemies);
+    this.drawTurrets(ctx, turrets);
     this.drawPlayerTank(ctx, tank);
+    this.drawDrones(ctx, drones);
 
     // Layer 5: Projectiles & Combat VFX (explosions, beams, arcs, particles)
     this.drawProjectiles(ctx, projectiles);
-    this.drawWorldEffects(ctx, effects);
+    this.drawWorldEffects(ctx, effects, isLowQuality);
 
     // Layer 6: Enemy Health Bars & Floating Damage Numbers (always crisp and readable above VFX)
     this.drawEnemyHealthBars(ctx, enemies);
@@ -150,7 +186,7 @@ export class Renderer {
     ctx.restore();
 
     // Layer 7 (Screen-space): Restrained edge damage feedback vignette
-    if (damageVignetteAlpha > 0.01 && this.damageVignetteCache) {
+    if (!isLowQuality && damageVignetteAlpha > 0.01 && this.damageVignetteCache) {
       ctx.save();
       ctx.globalAlpha = damageVignetteAlpha;
       ctx.drawImage(
@@ -434,6 +470,7 @@ export class Renderer {
   private drawDeploymentPad(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
     ctx.save();
     ctx.translate(cx, cy);
+    ctx.scale(DEPLOYMENT_PAD_SCALE, DEPLOYMENT_PAD_SCALE);
 
     ctx.fillStyle = '#31373B';
     ctx.strokeStyle = '#1E2326';
@@ -522,35 +559,39 @@ export class Renderer {
 
   private drawMines(
     ctx: CanvasRenderingContext2D,
-    mines: readonly LandmineInstance[]
+    mines: readonly LandmineInstance[],
+    isLowQuality = false
   ): void {
-    const nowSec = performance.now() * 0.001;
+    const nowSec = isLowQuality ? 0 : performance.now() * 0.001;
     for (let i = 0; i < mines.length; i++) {
       const m = mines[i];
       if (!m.active) continue;
 
       const isArmed = m.armTimer <= 0;
-      const pulse = isArmed ? 0.5 + 0.5 * Math.sin(nowSec * 6 + m.uid) : 0;
+      const pulse =
+        isArmed && !isLowQuality ? 0.5 + 0.5 * Math.sin(nowSec * 6 + m.uid) : 0;
 
       ctx.save();
       ctx.translate(m.x, m.y);
 
-      // Ground shadow
-      ctx.fillStyle = 'rgba(8, 10, 12, 0.38)';
-      ctx.beginPath();
-      ctx.arc(1.5, 2, 10, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Trigger zone pulse ring when armed
-      if (isArmed) {
+      // Trigger zone pulse ring when armed (skipped in performance mode)
+      if (isArmed && !isLowQuality) {
         ctx.strokeStyle = `rgba(163, 230, 53, ${0.14 + pulse * 0.16})`;
-        ctx.lineWidth = 1.1;
+        ctx.lineWidth = 1.2;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
         ctx.arc(0, 0, m.triggerRadius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
       }
+
+      ctx.scale(1.2, 1.2);
+
+      // Ground shadow
+      ctx.fillStyle = 'rgba(8, 10, 12, 0.38)';
+      ctx.beginPath();
+      ctx.arc(1.5, 2, 10, 0, Math.PI * 2);
+      ctx.fill();
 
       // Octagonal metallic mine casing
       ctx.fillStyle = '#333C36';
@@ -733,18 +774,168 @@ export class Renderer {
       }
 
       if (enemy.definitionId === 'siege_boss') {
+        ctx.scale(BOSS_VISUAL_SCALE, BOSS_VISUAL_SCALE);
         this.drawSiegeBoss(ctx, enemy);
-      } else if (enemy.definitionId === 'heavy_tank') {
-        this.drawHeavyTank(ctx, enemy);
-      } else if (enemy.definitionId === 'artillery') {
-        this.drawArtillery(ctx, enemy);
-      } else if (enemy.definitionId === 'assault_tank') {
-        this.drawAssaultTank(ctx, enemy);
-      } else if (enemy.definitionId === 'runner') {
-        this.drawRunner(ctx, enemy);
       } else {
-        this.drawScout(ctx, enemy);
+        ctx.scale(ENEMY_VISUAL_SCALE, ENEMY_VISUAL_SCALE);
+        if (enemy.definitionId === 'heavy_tank') {
+          this.drawHeavyTank(ctx, enemy);
+        } else if (enemy.definitionId === 'artillery') {
+          this.drawArtillery(ctx, enemy);
+        } else if (enemy.definitionId === 'assault_tank') {
+          this.drawAssaultTank(ctx, enemy);
+        } else if (enemy.definitionId === 'runner') {
+          this.drawRunner(ctx, enemy);
+        } else {
+          this.drawScout(ctx, enemy);
+        }
       }
+
+      // Lightweight frost slow & acid DoT ring indicators
+      if (!enemy.isDying) {
+        if (enemy.slowTimer && enemy.slowTimer > 0) {
+          ctx.strokeStyle = 'rgba(125, 211, 252, 0.72)';
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.arc(0, 0, enemy.radius * 0.92, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        if (enemy.acidTimer && enemy.acidTimer > 0) {
+          ctx.strokeStyle = 'rgba(163, 230, 53, 0.72)';
+          ctx.lineWidth = 1.6;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.arc(0, 0, enemy.radius * 1.04, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      ctx.restore();
+    }
+  }
+
+  private drawDelayedStrikes(
+    ctx: CanvasRenderingContext2D,
+    strikes: readonly DelayedStrike[]
+  ): void {
+    for (let i = 0; i < strikes.length; i++) {
+      const s = strikes[i];
+      if (s.kind === 'orbital') {
+        const progress = Math.max(0, Math.min(1, 1 - s.delayRemaining / s.totalDelay));
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        ctx.fillStyle = `rgba(56, 189, 248, ${0.08 + progress * 0.16})`;
+        ctx.beginPath();
+        ctx.arc(0, 0, s.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = `rgba(103, 232, 249, ${0.45 + progress * 0.45})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([7, 5]);
+        ctx.beginPath();
+        ctx.arc(0, 0, s.radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.strokeStyle = '#E0F2FE';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(0, 0, Math.max(6, s.radius * (1 - progress)), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      } else if (s.kind === 'plasma_vortex') {
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        ctx.fillStyle = 'rgba(168, 85, 247, 0.16)';
+        ctx.beginPath();
+        ctx.arc(0, 0, s.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(216, 180, 254, 0.65)';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.arc(0, 0, s.radius * 0.78, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
+  }
+
+  private drawTurrets(
+    ctx: CanvasRenderingContext2D,
+    turrets: readonly DeployableTurret[]
+  ): void {
+    for (let i = 0; i < turrets.length; i++) {
+      const t = turrets[i];
+      ctx.save();
+      ctx.translate(t.x, t.y);
+
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
+      ctx.beginPath();
+      ctx.arc(2, 3, 14, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Tripod base
+      ctx.fillStyle = '#1E293B';
+      ctx.strokeStyle = '#34D399';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Rotating twin barrel
+      ctx.rotate(t.angle);
+      ctx.fillStyle = '#94A3B8';
+      ctx.fillRect(4, -3.5, 14, 2.5);
+      ctx.fillRect(4, 1, 14, 2.5);
+
+      ctx.fillStyle = '#10B981';
+      ctx.beginPath();
+      ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  private drawDrones(
+    ctx: CanvasRenderingContext2D,
+    drones: readonly CombatDrone[]
+  ): void {
+    for (let i = 0; i < drones.length; i++) {
+      const d = drones[i];
+      ctx.save();
+      ctx.translate(d.x, d.y);
+
+      // Subtle ground shadow
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+      ctx.beginPath();
+      ctx.ellipse(2, 12, 7, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.rotate(d.aimAngle);
+
+      // Swept drone wings
+      ctx.fillStyle = '#F59E0B';
+      ctx.strokeStyle = '#451A03';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.moveTo(8, 0);
+      ctx.lineTo(-4, -9);
+      ctx.lineTo(-2, 0);
+      ctx.lineTo(-4, 9);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Glowing gold/cyan sensor eye
+      ctx.fillStyle = '#FEF08A';
+      ctx.beginPath();
+      ctx.arc(2.5, 0, 2.4, 0, Math.PI * 2);
+      ctx.fill();
 
       ctx.restore();
     }
@@ -761,13 +952,13 @@ export class Renderer {
       const xCenter = enemy.position.x + (enemy.hitReactionX || 0);
       const yCenter = enemy.position.y + (enemy.hitReactionY || 0);
       const barW = enemy.isBoss
-        ? 54
+        ? 72
         : enemy.definitionId === 'heavy_tank'
-          ? 40
+          ? 48
           : enemy.definitionId === 'assault_tank' || enemy.definitionId === 'artillery'
-            ? 32
-            : 26;
-      const barH = enemy.isBoss ? 5.5 : enemy.definitionId === 'heavy_tank' ? 4.5 : 4;
+            ? 38
+            : 30;
+      const barH = enemy.isBoss ? 6 : enemy.definitionId === 'heavy_tank' ? 5 : 4.5;
       const x = xCenter - barW * 0.5;
       const y = yCenter - enemy.radius - 14;
       const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
@@ -1322,6 +1513,7 @@ export class Renderer {
       tank.position.x + (tank.bodyRecoilX || 0),
       tank.position.y + (tank.bodyRecoilY || 0)
     );
+    ctx.scale(PLAYER_TANK_VISUAL_SCALE, PLAYER_TANK_VISUAL_SCALE);
 
     ctx.fillStyle = 'rgba(10, 12, 10, 0.46)';
     ctx.beginPath();
@@ -1348,6 +1540,30 @@ export class Renderer {
       ctx.lineWidth = 2.4;
       ctx.beginPath();
       ctx.arc(0, 0, 32, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Overdrive golden-amber heat vents around turret
+    if ((tank.overdriveTimer ?? 0) > 0) {
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.72)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.arc(0, 0, 34, tank.idlePhase * 0.6, tank.idlePhase * 0.6 + Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Reactive Energy Shield Barrier
+    if ((tank.shieldHp ?? 0) > 0 && (tank.shieldTimer ?? 0) > 0) {
+      ctx.fillStyle = 'rgba(45, 212, 191, 0.11)';
+      ctx.beginPath();
+      ctx.arc(0, 0, 39, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(94, 234, 212, 0.85)';
+      ctx.lineWidth = 2.1;
+      ctx.beginPath();
+      ctx.arc(0, 0, 39, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -1557,23 +1773,40 @@ export class Renderer {
         continue;
       }
 
+      if (p.kind === 'cluster_bomblet') {
+        this.drawMortarShell(ctx, p);
+        continue;
+      }
+
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(p.angle);
       const tier = Math.max(1, Math.min(5, p.visualTier ?? 1));
 
-      if (p.kind === 'mg_bullet') {
-        // High-speed bright tracer + pointed brass slug
+      if (p.kind === 'mg_bullet' || p.kind === 'turret_round' || p.kind === 'drone_bolt') {
+        ctx.scale(1.2, 1.2);
+        const isTurret = p.kind === 'turret_round';
+        const isDrone = p.kind === 'drone_bolt';
         const trailLen = 15 + tier * 2.2;
-        ctx.fillStyle =
-          tier >= 4 ? 'rgba(254, 240, 138, 0.36)' : 'rgba(250, 204, 21, 0.28)';
+        ctx.fillStyle = isTurret
+          ? 'rgba(52, 211, 153, 0.34)'
+          : isDrone
+            ? 'rgba(251, 191, 36, 0.36)'
+            : tier >= 4
+              ? 'rgba(254, 240, 138, 0.36)'
+              : 'rgba(250, 204, 21, 0.28)';
         ctx.fillRect(-trailLen - 4, -1.7, trailLen, 3.4);
 
-        ctx.fillStyle =
-          tier >= 4 ? 'rgba(254, 249, 195, 0.88)' : 'rgba(253, 224, 71, 0.78)';
+        ctx.fillStyle = isTurret
+          ? '#6EE7B7'
+          : isDrone
+            ? '#FDE047'
+            : tier >= 4
+              ? 'rgba(254, 249, 195, 0.88)'
+              : 'rgba(253, 224, 71, 0.78)';
         ctx.fillRect(-trailLen * 0.7, -0.9, trailLen * 0.7, 1.8);
 
-        ctx.fillStyle = '#FEF9C3';
+        ctx.fillStyle = isTurret ? '#A7F3D0' : '#FEF9C3';
         ctx.beginPath();
         ctx.moveTo(6.5 + tier * 0.4, 0);
         ctx.lineTo(0, -1.9);
@@ -1582,43 +1815,111 @@ export class Renderer {
         ctx.lineTo(0, 1.9);
         ctx.closePath();
         ctx.fill();
-      } else if (p.kind === 'rocket') {
-        const rocketScale = 1 + (tier - 1) * 0.08;
+      } else if (p.kind === 'ricochet_slug') {
+        ctx.fillStyle = 'rgba(45, 212, 191, 0.35)';
+        ctx.beginPath();
+        ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#99F6E4';
+        ctx.strokeStyle = '#0F766E';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, 4.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else if (p.kind === 'frost_shell') {
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.3)';
+        ctx.fillRect(-20, -2.8, 20, 5.6);
+        ctx.fillStyle = '#BAE6FD';
+        ctx.strokeStyle = '#0284C7';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(10, 0);
+        ctx.lineTo(1, -4.2);
+        ctx.lineTo(-7, 0);
+        ctx.lineTo(1, 4.2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else if (p.kind === 'acid_shell') {
+        ctx.fillStyle = 'rgba(132, 204, 22, 0.32)';
+        ctx.fillRect(-18, -2.6, 18, 5.2);
+        ctx.fillStyle = '#BEF264';
+        ctx.strokeStyle = '#3F6212';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, 5.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else if (p.kind === 'plasma_orb') {
+        ctx.fillStyle = 'rgba(168, 85, 247, 0.32)';
+        ctx.beginPath();
+        ctx.arc(0, 0, 11.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#E9D5FF';
+        ctx.strokeStyle = '#7E22CE';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else if (p.kind === 'shrapnel_shard') {
+        ctx.fillStyle = '#FDBA74';
+        ctx.beginPath();
+        ctx.moveTo(6, 0);
+        ctx.lineTo(-3, -2.2);
+        ctx.lineTo(-3, 2.2);
+        ctx.closePath();
+        ctx.fill();
+      } else if (p.kind === 'pierce_slug') {
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.35)';
+        ctx.fillRect(-26, -2.4, 26, 4.8);
+        ctx.fillStyle = '#FEF3C7';
+        ctx.strokeStyle = '#D97706';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(11, 0);
+        ctx.lineTo(-5, -2.8);
+        ctx.lineTo(-5, 2.8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else if (p.kind === 'cluster_bomb') {
+        ctx.fillStyle = 'rgba(249, 115, 22, 0.4)';
+        ctx.fillRect(-16, -2.8, 16, 5.6);
+        ctx.fillStyle = '#F97316';
+        ctx.strokeStyle = '#7C2D12';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, 6.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#FDE047';
+        ctx.beginPath();
+        ctx.arc(1.5, 0, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === 'rocket' || p.kind === 'hunter_missile' || p.kind === 'shrapnel_shell') {
+        const isHunter = p.kind === 'hunter_missile';
+        const isShrapnel = p.kind === 'shrapnel_shell';
+        const rocketScale = (isHunter ? 1.12 : 1.24) + (tier - 1) * 0.08;
         ctx.scale(rocketScale, rocketScale);
 
-        // Flickering twin-layer exhaust plume
-        ctx.fillStyle =
-          tier >= 4 ? 'rgba(251, 113, 133, 0.75)' : 'rgba(249, 115, 22, 0.78)';
+        ctx.fillStyle = isHunter
+          ? 'rgba(244, 114, 182, 0.72)'
+          : isShrapnel
+            ? 'rgba(251, 146, 60, 0.7)'
+            : tier >= 4
+              ? 'rgba(251, 113, 133, 0.75)'
+              : 'rgba(249, 115, 22, 0.78)';
         ctx.beginPath();
         ctx.moveTo(-6, -2);
-        ctx.lineTo(-20 - tier * 1.8, -3.5);
-        ctx.lineTo(-15, 0);
-        ctx.lineTo(-20 - tier * 1.8, 3.5);
+        ctx.lineTo(-18 - tier * 1.6, -3.2);
+        ctx.lineTo(-14, 0);
+        ctx.lineTo(-18 - tier * 1.6, 3.2);
         ctx.lineTo(-6, 2);
         ctx.closePath();
         ctx.fill();
 
-        ctx.fillStyle = '#FEF08A';
-        ctx.beginPath();
-        ctx.moveTo(-6, -1.1);
-        ctx.lineTo(-13, 0);
-        ctx.lineTo(-6, 1.1);
-        ctx.closePath();
-        ctx.fill();
-
-        // Swept stabilizing tail fins
-        ctx.fillStyle = '#475569';
-        ctx.beginPath();
-        ctx.moveTo(-4, -2.5);
-        ctx.lineTo(-8, -5.2);
-        ctx.lineTo(-8, -2.2);
-        ctx.moveTo(-4, 2.5);
-        ctx.lineTo(-8, 5.2);
-        ctx.lineTo(-8, 2.2);
-        ctx.closePath();
-        ctx.fill();
-
-        // Rocket fuselage
         ctx.fillStyle = '#E2E8F0';
         ctx.strokeStyle = '#334155';
         ctx.lineWidth = 1;
@@ -1627,8 +1928,7 @@ export class Renderer {
         ctx.fill();
         ctx.stroke();
 
-        // Warhead band + nose cone
-        ctx.fillStyle = tier >= 4 ? '#FB7185' : '#F43F5E';
+        ctx.fillStyle = isHunter ? '#EC4899' : isShrapnel ? '#F59E0B' : '#F43F5E';
         ctx.beginPath();
         ctx.moveTo(10, 0);
         ctx.lineTo(3, -3.2);
@@ -1636,8 +1936,7 @@ export class Renderer {
         ctx.closePath();
         ctx.fill();
       } else if (p.kind === 'rail_slug') {
-        // Hyper-velocity ionized chevron + streak
-        const slugScale = 1 + (tier - 1) * 0.1;
+        const slugScale = 1.24 + (tier - 1) * 0.11;
         ctx.scale(slugScale, slugScale);
 
         ctx.fillStyle = 'rgba(34, 211, 238, 0.34)';
@@ -1660,6 +1959,7 @@ export class Renderer {
         ctx.fill();
         ctx.stroke();
       } else if (p.kind === 'enemy_artillery_shell') {
+        ctx.scale(1.2, 1.2);
         // Hostile glowing crimson-amber artillery shell with bright readable outline
         ctx.fillStyle = 'rgba(239, 68, 68, 0.34)';
         ctx.beginPath();
@@ -1704,7 +2004,7 @@ export class Renderer {
         ctx.fill();
       } else if (p.kind === 'enemy_boss_shell') {
         // Heavy Boss Siege Shell: larger scale, dark crimson-gold armor casing + luminous rose aura
-        const scale = tier >= 2 ? 1.24 : 1.04;
+        const scale = tier >= 2 ? 1.48 : 1.26;
         ctx.scale(scale, scale);
 
         ctx.fillStyle = 'rgba(244, 63, 94, 0.36)';
@@ -1750,10 +2050,10 @@ export class Renderer {
         const isHeavy = p.kind === 'heavy_shell';
         const isCrit = Boolean(p.isCrit);
         const scale = isHeavy
-          ? 1.18 + (tier - 1) * 0.11
+          ? 1.38 + (tier - 1) * 0.12
           : isCrit
-            ? 1.24
-            : 1.04;
+            ? 1.52
+            : 1.32;
         ctx.scale(scale, scale);
 
         const trailLen = isHeavy ? 22 + (tier - 1) * 3.5 : isCrit ? 28 : 21;
@@ -1843,7 +2143,7 @@ export class Renderer {
     // Elevated finned artillery bomb pitched gently along arc
     ctx.translate(p.x, p.y - arcHeight);
     ctx.rotate(p.angle + (t - 0.5) * 0.45);
-    const scale = (0.9 + Math.sin(t * Math.PI) * 0.48) * (1 + (tier - 1) * 0.08);
+    const scale = (1.12 + Math.sin(t * Math.PI) * 0.54) * (1 + (tier - 1) * 0.08);
     ctx.scale(scale, scale);
 
     // Tracer glow behind mortar bomb
@@ -1883,11 +2183,21 @@ export class Renderer {
 
   private drawWorldEffects(
     ctx: CanvasRenderingContext2D,
-    effects: readonly VisualEffect[]
+    effects: readonly VisualEffect[],
+    isLowQuality = false
   ): void {
     for (let i = 0; i < effects.length; i++) {
       const fx = effects[i];
       if (fx.kind === 'damage_text') continue;
+      if (
+        isLowQuality &&
+        (fx.kind === 'smoke' ||
+          fx.kind === 'debris' ||
+          fx.kind === 'hit_ring' ||
+          fx.kind === 'muzzle')
+      ) {
+        continue;
+      }
 
       const ratio = Math.max(0, fx.life / fx.maxLife);
       const progress = 1 - ratio;
@@ -1970,7 +2280,7 @@ export class Renderer {
       } else if (fx.kind === 'rail_beam') {
         // Outer cyan ionized glow
         ctx.strokeStyle = fx.color;
-        ctx.lineWidth = Math.max(1.5, fx.size * 2.2 * ratio);
+        ctx.lineWidth = Math.max(1.8, fx.size * 2.5 * ratio);
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(fx.x, fx.y);
@@ -1979,7 +2289,7 @@ export class Renderer {
 
         // Crisp white-hot beam core
         ctx.strokeStyle = fx.secondaryColor ?? '#ECFEFF';
-        ctx.lineWidth = Math.max(1, fx.size * 0.7 * ratio);
+        ctx.lineWidth = Math.max(1.2, fx.size * 0.8 * ratio);
         ctx.beginPath();
         ctx.moveTo(fx.x, fx.y);
         ctx.lineTo(fx.tx, fx.ty);
@@ -1991,11 +2301,11 @@ export class Renderer {
         const dx = Math.cos(fx.angle);
         const dy = Math.sin(fx.angle);
         ctx.strokeStyle = 'rgba(165, 243, 252, 0.75)';
-        ctx.lineWidth = 1.4;
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
         for (let t = 1; t <= 3; t++) {
-          const dist = t * 42;
-          const tickHalf = (8 - t * 1.5) * ratio;
+          const dist = t * 48;
+          const tickHalf = (9.5 - t * 1.6) * ratio;
           const px = fx.x + dx * dist;
           const py = fx.y + dy * dist;
           ctx.moveTo(px - nx * tickHalf, py - ny * tickHalf);
@@ -2062,6 +2372,58 @@ export class Renderer {
         ctx.arc(0, 0, len * 0.54, -half * 0.46, half * 0.46);
         ctx.closePath();
         ctx.fill();
+      } else if (fx.kind === 'laser_beam') {
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = Math.max(2, fx.size * 2.2 * ratio);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(fx.x, fx.y);
+        ctx.lineTo(fx.tx, fx.ty);
+        ctx.stroke();
+
+        ctx.strokeStyle = fx.secondaryColor ?? '#FFE4E6';
+        ctx.lineWidth = Math.max(1, fx.size * 0.75 * ratio);
+        ctx.beginPath();
+        ctx.moveTo(fx.x, fx.y);
+        ctx.lineTo(fx.tx, fx.ty);
+        ctx.stroke();
+      } else if (fx.kind === 'orbital_beam') {
+        const beamW = fx.size * (0.4 + ratio * 0.75);
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.28)';
+        ctx.fillRect(fx.x - beamW, fx.y - 420, beamW * 2, 420);
+        ctx.fillStyle = 'rgba(224, 242, 254, 0.85)';
+        ctx.fillRect(fx.x - beamW * 0.38, fx.y - 420, beamW * 0.76, 420);
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.ellipse(fx.x, fx.y, beamW * 1.4, beamW * 0.65, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (fx.kind === 'sky_bolt') {
+        const seed = fx.seed ?? 1;
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = Math.max(1.8, fx.size * ratio);
+        ctx.beginPath();
+        ctx.moveTo(fx.x + (hash01(seed, 1) - 0.5) * 28, fx.y - 260);
+        ctx.lineTo(fx.x + (hash01(seed, 2) - 0.5) * 22, fx.y - 165);
+        ctx.lineTo(fx.x + (hash01(seed, 3) - 0.5) * 18, fx.y - 80);
+        ctx.lineTo(fx.x, fx.y);
+        ctx.stroke();
+        ctx.strokeStyle = fx.secondaryColor ?? '#EFF6FF';
+        ctx.lineWidth = Math.max(1, fx.size * 0.42 * ratio);
+        ctx.stroke();
+      } else if (fx.kind === 'shockwave_ring' || fx.kind === 'shield_pulse') {
+        ctx.translate(fx.x, fx.y);
+        const radius = fx.size * (0.3 + progress * 0.72);
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = Math.max(1.5, 4.2 * ratio);
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = fx.secondaryColor ?? '#E2E8F0';
+        ctx.lineWidth = Math.max(1, 1.8 * ratio);
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.82, 0, Math.PI * 2);
+        ctx.stroke();
       } else if (fx.kind === 'blast_ring') {
         ctx.translate(fx.x, fx.y);
         const radius = fx.size * (0.4 + progress * 0.66);
@@ -2069,9 +2431,17 @@ export class Renderer {
         ctx.fillStyle =
           fx.style === 'mine'
             ? 'rgba(163, 230, 53, 0.16)'
-            : fx.style === 'boss'
-              ? 'rgba(244, 63, 94, 0.2)'
-              : 'rgba(249, 115, 22, 0.18)';
+            : fx.style === 'frost'
+              ? 'rgba(56, 189, 248, 0.18)'
+              : fx.style === 'acid'
+                ? 'rgba(132, 204, 22, 0.18)'
+                : fx.style === 'plasma'
+                  ? 'rgba(168, 85, 247, 0.2)'
+                  : fx.style === 'orbital'
+                    ? 'rgba(103, 232, 249, 0.22)'
+                    : fx.style === 'boss'
+                      ? 'rgba(244, 63, 94, 0.2)'
+                      : 'rgba(249, 115, 22, 0.18)';
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.fill();
@@ -2085,8 +2455,8 @@ export class Renderer {
         ctx.translate(fx.x, fx.y);
         const radius = fx.size * (0.35 + progress * 1.05);
 
-        // Initial bright core flash (first 35% of life)
-        if (progress < 0.35) {
+        // Initial bright core flash (high quality only)
+        if (!isLowQuality && progress < 0.35) {
           const flashAlpha = (1 - progress / 0.35) * 0.88;
           ctx.fillStyle = `rgba(255, 251, 235, ${flashAlpha})`;
           ctx.beginPath();
@@ -2098,33 +2468,54 @@ export class Renderer {
         ctx.fillStyle =
           fx.style === 'boss'
             ? 'rgba(244, 63, 94, 0.38)'
-            : fx.style === 'mine'
-              ? 'rgba(250, 204, 21, 0.38)'
-              : 'rgba(249, 115, 22, 0.36)';
+            : fx.style === 'frost'
+              ? 'rgba(56, 189, 248, 0.34)'
+              : fx.style === 'acid'
+                ? 'rgba(132, 204, 22, 0.34)'
+                : fx.style === 'plasma'
+                  ? 'rgba(168, 85, 247, 0.36)'
+                  : fx.style === 'orbital'
+                    ? 'rgba(34, 211, 238, 0.42)'
+                    : fx.style === 'mine'
+                      ? 'rgba(250, 204, 21, 0.38)'
+                      : 'rgba(249, 115, 22, 0.36)';
         ctx.beginPath();
         ctx.arc(0, 0, radius * 0.72, 0, Math.PI * 2);
         ctx.fill();
 
         // Crisp shockwave ring
-        ctx.strokeStyle = fx.style === 'boss' ? '#FDA4AF' : '#FBBF24';
+        ctx.strokeStyle =
+          fx.style === 'boss'
+            ? '#FDA4AF'
+            : fx.style === 'frost'
+              ? '#7DD3FC'
+              : fx.style === 'acid'
+                ? '#BEF264'
+                : fx.style === 'plasma'
+                  ? '#D8B4FE'
+                  : fx.style === 'orbital'
+                    ? '#A5F3FC'
+                    : '#FBBF24';
         ctx.lineWidth = Math.max(1.2, (fx.style === 'boss' ? 3.2 : 2.3) * ratio);
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Radial shrapnel rays
-        ctx.strokeStyle = fx.color;
-        ctx.lineWidth = 1.6;
-        const rayCount = fx.style === 'boss' ? 8 : 6;
-        ctx.beginPath();
-        for (let s = 0; s < rayCount; s++) {
-          const a = fx.angle + (s * Math.PI * 2) / rayCount;
-          const r1 = radius * 0.45;
-          const r2 = radius * (1.05 + (s % 2) * 0.16);
-          ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
-          ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2);
+        // Radial shrapnel rays (high quality only)
+        if (!isLowQuality) {
+          ctx.strokeStyle = fx.color;
+          ctx.lineWidth = 1.6;
+          const rayCount = fx.style === 'boss' ? 8 : 6;
+          ctx.beginPath();
+          for (let s = 0; s < rayCount; s++) {
+            const a = fx.angle + (s * Math.PI * 2) / rayCount;
+            const r1 = radius * 0.45;
+            const r2 = radius * (1.05 + (s % 2) * 0.16);
+            ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
+            ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
       }
 
       ctx.restore();

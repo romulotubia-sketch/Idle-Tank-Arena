@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ArrowRight,
   ArrowUpCircle,
@@ -8,7 +8,11 @@ import {
   Lock,
   Sparkles,
 } from 'lucide-react';
-import { SKILL_COLLECTION_CONFIG } from '../game/constants';
+import {
+  SKILL_COLLECTION_CONFIG,
+  SKILL_RARITY_ORDER,
+  SKILL_SUMMON_RARITY_WEIGHTS,
+} from '../game/constants';
 import {
   SkillCollectionComputedBonuses,
   SkillCollectionPreviewRow,
@@ -24,6 +28,8 @@ export interface SkillCollectionFeedbackInfo {
 }
 
 type MobileCollectionTab = 'collection' | 'details';
+type RarityFilter = 'all' | SkillRarity;
+type CollectionSortMode = 'rarity' | 'unlocked' | 'level' | 'name';
 
 interface SkillCollectionModalProps {
   entries: SkillCollectionEntry[];
@@ -37,29 +43,48 @@ interface SkillCollectionModalProps {
   onClose: () => void;
 }
 
-function getRarityStyles(rarity: SkillRarity): {
+const RARITY_RANK: Record<SkillRarity, number> = {
+  common: 0,
+  uncommon: 1,
+  rare: 2,
+  epic: 3,
+  legendary: 4,
+};
+
+export function getSkillRarityStyles(rarity: SkillRarity): {
   label: string;
+  shortLabel: string;
   badgeClass: string;
 } {
   switch (rarity) {
     case 'common':
       return {
         label: 'Common',
+        shortLabel: 'Com',
         badgeClass: 'bg-slate-700/50 border-slate-500/40 text-slate-200',
+      };
+    case 'uncommon':
+      return {
+        label: 'Uncommon',
+        shortLabel: 'Unc',
+        badgeClass: 'bg-emerald-900/55 border-emerald-400/50 text-emerald-200',
       };
     case 'rare':
       return {
         label: 'Rare',
+        shortLabel: 'Rare',
         badgeClass: 'bg-sky-900/55 border-sky-400/50 text-sky-200',
       };
     case 'epic':
       return {
         label: 'Epic',
+        shortLabel: 'Epic',
         badgeClass: 'bg-violet-900/55 border-violet-400/50 text-violet-200',
       };
     case 'legendary':
       return {
         label: 'Legendary',
+        shortLabel: 'Leg',
         badgeClass: 'bg-amber-900/55 border-amber-400/50 text-amber-200',
       };
   }
@@ -80,9 +105,51 @@ export function SkillCollectionModal({
     entries[0]?.skillId ?? 'cannon'
   );
   const [mobileTab, setMobileTab] = useState<MobileCollectionTab>('collection');
+  const [rarityFilter, setRarityFilter] = useState<RarityFilter>('all');
+  const [sortMode, setSortMode] = useState<CollectionSortMode>('rarity');
+
+  const visibleEntries = useMemo(() => {
+    const filtered = entries.filter((entry) => {
+      if (rarityFilter === 'all') return true;
+      const def = skillRegistry.getDefinition(entry.skillId);
+      return def?.rarity === rarityFilter;
+    });
+
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
+      const defA = skillRegistry.getDefinition(a.skillId);
+      const defB = skillRegistry.getDefinition(b.skillId);
+      const rarA = defA ? RARITY_RANK[defA.rarity] : 0;
+      const rarB = defB ? RARITY_RANK[defB.rarity] : 0;
+      const nameA = defA?.name ?? a.skillId;
+      const nameB = defB?.name ?? b.skillId;
+
+      if (sortMode === 'rarity') {
+        if (rarA !== rarB) return rarA - rarB;
+        return nameA.localeCompare(nameB);
+      }
+      if (sortMode === 'unlocked') {
+        if (a.unlocked !== b.unlocked) return a.unlocked ? -1 : 1;
+        if (a.canUpgrade !== b.canUpgrade) return a.canUpgrade ? -1 : 1;
+        if (rarA !== rarB) return rarB - rarA;
+        return nameA.localeCompare(nameB);
+      }
+      if (sortMode === 'level') {
+        if (a.collectionLevel !== b.collectionLevel) {
+          return b.collectionLevel - a.collectionLevel;
+        }
+        if (a.fragments !== b.fragments) return b.fragments - a.fragments;
+        return rarB - rarA;
+      }
+      return nameA.localeCompare(nameB);
+    });
+    return sorted;
+  }, [entries, rarityFilter, sortMode]);
 
   const selectedEntry =
-    entries.find((e) => e.skillId === selectedSkillId) ?? entries[0];
+    entries.find((e) => e.skillId === selectedSkillId) ??
+    visibleEntries[0] ??
+    entries[0];
   const selectedDef = selectedEntry
     ? skillRegistry.getDefinition(selectedEntry.skillId)
     : undefined;
@@ -114,8 +181,8 @@ export function SkillCollectionModal({
       : 0;
 
   const rarityMeta = selectedDef
-    ? getRarityStyles(selectedDef.rarity)
-    : getRarityStyles('common');
+    ? getSkillRarityStyles(selectedDef.rarity)
+    : getSkillRarityStyles('common');
 
   const baseCooldownSeconds =
     selectedModule && selectedEntry
@@ -188,149 +255,212 @@ export function SkillCollectionModal({
       </div>
 
       {/* Responsive Split: Side-by-side on Mobile Landscape (sm+) & Desktop */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-[minmax(0,1.25fr)_minmax(240px,1fr)] md:grid-cols-[minmax(0,1.35fr)_minmax(280px,1fr)] overflow-hidden">
-        {/* LEFT: 8 Skill Collection Cards */}
+      <div className="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-[minmax(0,1.3fr)_minmax(240px,1fr)] md:grid-cols-[minmax(0,1.4fr)_minmax(280px,1fr)] overflow-hidden">
+        {/* LEFT: Filter Toolbar + 24 Skill Collection Cards */}
         <section
           aria-label="Skill cards"
           className={`${
             mobileTab === 'collection' ? 'flex' : 'hidden sm:flex'
-          } flex-col min-h-0 overflow-y-auto panel-scroll p-2 sm:p-2.5 sm:border-r border-white/10 bg-[#10151B]`}
+          } flex-col min-h-0 sm:border-r border-white/10 bg-[#10151B] overflow-hidden`}
         >
-          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-1.5 sm:gap-2">
-            {entries.map((entry) => {
-              const def = skillRegistry.getDefinition(entry.skillId);
-              if (!def) return null;
+          {/* Compact Rarity Filter & Sort Strip */}
+          <div className="shrink-0 px-2 sm:px-2.5 py-1.5 border-b border-white/10 bg-[#131922] flex flex-wrap items-center justify-between gap-1.5">
+            <div
+              className="flex items-center gap-1 overflow-x-auto no-scrollbar"
+              role="group"
+              aria-label="Filter by rarity"
+            >
+              <button
+                type="button"
+                onClick={() => setRarityFilter('all')}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 cursor-pointer transition-colors ${
+                  rarityFilter === 'all'
+                    ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                    : 'bg-[#0D1218] border-white/10 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                All ({entries.length})
+              </button>
+              {SKILL_RARITY_ORDER.map((rarity) => {
+                const st = getSkillRarityStyles(rarity);
+                const active = rarityFilter === rarity;
+                const dropPct = SKILL_SUMMON_RARITY_WEIGHTS[rarity];
+                return (
+                  <button
+                    key={rarity}
+                    type="button"
+                    onClick={() => setRarityFilter(rarity)}
+                    title={`${st.label} (${dropPct}% summon rate)`}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold border shrink-0 cursor-pointer transition-colors ${
+                      active
+                        ? `${st.badgeClass} ring-1 ring-white/40`
+                        : 'bg-[#0D1218] border-white/10 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                );
+              })}
+            </div>
 
-              const isSelected = selectedEntry?.skillId === entry.skillId;
-              const isHighlighted = highlightedSkillId === entry.skillId;
-              const cardProgress =
-                entry.unlocked && entry.nextUpgradeCost
-                  ? Math.max(
-                      0,
-                      Math.min(100, (entry.fragments / entry.nextUpgradeCost) * 100)
-                    )
-                  : entry.isMaxLevel
-                    ? 100
-                    : 0;
+            <label className="flex items-center gap-1 text-[10px] text-slate-400 shrink-0">
+              <span className="hidden md:inline">Sort</span>
+              <select
+                aria-label="Sort skills"
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as CollectionSortMode)}
+                className="bg-[#0D1218] border border-white/15 rounded px-1.5 py-0.5 text-[10px] font-semibold text-slate-200 focus:outline-none focus:border-amber-400 cursor-pointer"
+              >
+                <option value="rarity">Rarity</option>
+                <option value="unlocked">Unlocked</option>
+                <option value="level">Level</option>
+                <option value="name">Name</option>
+              </select>
+            </label>
+          </div>
 
-              return (
-                <button
-                  key={entry.skillId}
-                  type="button"
-                  onClick={(e) => {
-                    e.currentTarget.blur();
-                    setSelectedSkillId(entry.skillId);
-                    setMobileTab('details');
-                  }}
-                  aria-pressed={isSelected}
-                  className={`relative flex flex-col justify-between gap-1.5 p-2 rounded-lg border text-left transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
-                    isHighlighted
-                      ? 'bg-emerald-950/50 border-emerald-400 animate-summon-pop'
-                      : isSelected
-                        ? 'bg-[#1A2634] border-amber-400 shadow-md'
-                        : entry.unlocked
-                          ? 'bg-[#161D26] hover:bg-[#1C2531] border-white/12'
-                          : 'bg-[#12161C] hover:bg-[#161B23] border-white/8 opacity-80'
-                  }`}
-                >
-                  {/* Top Row: Icon + Level / Lock */}
-                  <div className="flex items-start justify-between gap-1">
-                    <div
-                      className="w-8 h-8 rounded-md flex items-center justify-center border shrink-0"
-                      style={{
-                        backgroundColor: entry.unlocked
-                          ? `${def.accentColor}1A`
-                          : 'rgba(15, 23, 42, 0.7)',
-                        borderColor: entry.unlocked
-                          ? `${def.accentColor}66`
-                          : 'rgba(148, 163, 184, 0.2)',
-                      }}
-                    >
-                      {entry.unlocked ? (
-                        renderSkillIcon(entry.skillId, def.accentColor, 'w-4 h-4')
-                      ) : (
-                        <Lock className="w-3.5 h-3.5 text-slate-500" />
-                      )}
-                    </div>
+          <div className="flex-1 min-h-0 overflow-y-auto panel-scroll p-2 sm:p-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5 sm:gap-2">
+              {visibleEntries.map((entry) => {
+                const def = skillRegistry.getDefinition(entry.skillId);
+                if (!def) return null;
 
-                    <div className="flex flex-col items-end gap-0.5">
-                      {entry.unlocked ? (
-                        <span
-                          className={`font-mono-tabular text-[10px] font-bold px-1.5 py-0.5 rounded border leading-none ${
-                            entry.isMaxLevel
-                              ? 'bg-amber-500/20 border-amber-400/60 text-amber-200'
-                              : 'bg-[#0F141B] border-white/15 text-amber-300'
-                          }`}
-                        >
-                          {entry.isMaxLevel
-                            ? `MAX`
-                            : `Lv.${entry.collectionLevel}/${entry.maxCollectionLevel}`}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-600/50 text-slate-400 leading-none">
-                          Locked
-                        </span>
-                      )}
+                const isSelected = selectedEntry?.skillId === entry.skillId;
+                const isHighlighted = highlightedSkillId === entry.skillId;
+                const cardRarity = getSkillRarityStyles(def.rarity);
+                const cardProgress =
+                  entry.unlocked && entry.nextUpgradeCost
+                    ? Math.max(
+                        0,
+                        Math.min(100, (entry.fragments / entry.nextUpgradeCost) * 100)
+                      )
+                    : entry.isMaxLevel
+                      ? 100
+                      : 0;
 
-                      {entry.canUpgrade && (
-                        <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-300">
-                          <ArrowUpCircle className="w-2.5 h-2.5" />
-                          Ready
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Middle: Name */}
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">
-                      {def.name}
-                    </div>
-                    <p className="hidden md:line-clamp-2 mt-0.5 text-[10px] leading-snug text-slate-400">
-                      {def.summary}
-                    </p>
-                  </div>
-
-                  {/* Bottom: Fragment Counter & Progress */}
-                  <div className="flex flex-col gap-1 pt-1 border-t border-white/8">
-                    <div className="flex items-center justify-between text-[10px] font-mono-tabular">
-                      <span
-                        className={
-                          entry.unlocked ? 'text-sky-300 font-semibold' : 'text-slate-500'
-                        }
+                return (
+                  <button
+                    key={entry.skillId}
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      setSelectedSkillId(entry.skillId);
+                      setMobileTab('details');
+                    }}
+                    aria-pressed={isSelected}
+                    className={`relative flex flex-col justify-between gap-1.5 p-2 rounded-lg border text-left transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
+                      isHighlighted
+                        ? 'bg-emerald-950/50 border-emerald-400 animate-summon-pop'
+                        : isSelected
+                          ? 'bg-[#1A2634] border-amber-400 shadow-md'
+                          : entry.unlocked
+                            ? 'bg-[#161D26] hover:bg-[#1C2531] border-white/12'
+                            : 'bg-[#12161C] hover:bg-[#161B23] border-white/8 opacity-80'
+                    }`}
+                  >
+                    {/* Top Row: Icon + Level / Lock */}
+                    <div className="flex items-start justify-between gap-1">
+                      <div
+                        className="w-8 h-8 rounded-md flex items-center justify-center border shrink-0"
+                        style={{
+                          backgroundColor: entry.unlocked
+                            ? `${def.accentColor}1A`
+                            : 'rgba(15, 23, 42, 0.7)',
+                          borderColor: entry.unlocked
+                            ? `${def.accentColor}66`
+                            : 'rgba(148, 163, 184, 0.2)',
+                        }}
                       >
-                        {entry.unlocked ? 'Frags' : 'Summon'}
-                      </span>
-                      {entry.unlocked && (
+                        {entry.unlocked ? (
+                          renderSkillIcon(entry.skillId, def.accentColor, 'w-4 h-4')
+                        ) : (
+                          <Lock className="w-3.5 h-3.5 text-slate-500" />
+                        )}
+                      </div>
+
+                      <div className="flex flex-col items-end gap-0.5">
+                        {entry.unlocked ? (
+                          <span
+                            className={`font-mono-tabular text-[10px] font-bold px-1.5 py-0.5 rounded border leading-none ${
+                              entry.isMaxLevel
+                                ? 'bg-amber-500/20 border-amber-400/60 text-amber-200'
+                                : 'bg-[#0F141B] border-white/15 text-amber-300'
+                            }`}
+                          >
+                            {entry.isMaxLevel
+                              ? `MAX`
+                              : `Lv.${entry.collectionLevel}/${entry.maxCollectionLevel}`}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-600/50 text-slate-400 leading-none">
+                            Locked
+                          </span>
+                        )}
+
+                        {entry.canUpgrade && (
+                          <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-300">
+                            <ArrowUpCircle className="w-2.5 h-2.5" />
+                            Ready
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Middle: Name + Rarity Badge */}
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-white truncate">
+                        {def.name}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1">
+                        <span
+                          className={`text-[9px] font-bold px-1 py-px rounded border leading-tight ${cardRarity.badgeClass}`}
+                        >
+                          {cardRarity.label}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Bottom: Fragment Counter & Progress */}
+                    <div className="flex flex-col gap-1 pt-1 border-t border-white/8">
+                      <div className="flex items-center justify-between text-[10px] font-mono-tabular">
                         <span
                           className={
-                            entry.canUpgrade
-                              ? 'text-emerald-300 font-bold'
-                              : 'text-slate-300'
+                            entry.unlocked ? 'text-sky-300 font-semibold' : 'text-slate-500'
                           }
                         >
-                          {entry.isMaxLevel
-                            ? `${entry.fragments}`
-                            : `${entry.fragments}/${entry.nextUpgradeCost}`}
+                          {entry.unlocked ? 'Frags' : 'Summon'}
                         </span>
-                      )}
+                        {entry.unlocked && (
+                          <span
+                            className={
+                              entry.canUpgrade
+                                ? 'text-emerald-300 font-bold'
+                                : 'text-slate-300'
+                            }
+                          >
+                            {entry.isMaxLevel
+                              ? `${entry.fragments}`
+                              : `${entry.fragments}/${entry.nextUpgradeCost}`}
+                          </span>
+                        )}
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-[#0B0F14] overflow-hidden border border-white/10">
+                        <div
+                          className={`h-full transition-all duration-200 ${
+                            entry.isMaxLevel
+                              ? 'bg-amber-400'
+                              : entry.canUpgrade
+                                ? 'bg-emerald-400'
+                                : 'bg-sky-400/80'
+                          }`}
+                          style={{ width: `${cardProgress}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-1.5 w-full rounded-full bg-[#0B0F14] overflow-hidden border border-white/10">
-                      <div
-                        className={`h-full transition-all duration-200 ${
-                          entry.isMaxLevel
-                            ? 'bg-amber-400'
-                            : entry.canUpgrade
-                              ? 'bg-emerald-400'
-                              : 'bg-sky-400/80'
-                        }`}
-                        style={{ width: `${cardProgress}%` }}
-                      />
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </section>
 
@@ -402,6 +532,12 @@ export function SkillCollectionModal({
                     <span>Lv.1 Cooldown</span>
                     <span className="text-slate-200 font-semibold">
                       {baseCooldownSeconds.toFixed(2)}s
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono-tabular">
+                    <span>{rarityMeta.label} Tier Drop Rate</span>
+                    <span className="text-slate-200 font-semibold">
+                      {SKILL_SUMMON_RARITY_WEIGHTS[selectedDef.rarity]}%
                     </span>
                   </div>
                 </div>

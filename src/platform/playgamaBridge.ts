@@ -15,6 +15,11 @@ interface PlaygamaBridgeGlobal {
     get?: (keys: string[]) => Promise<Record<string, unknown>>;
     set?: (data: Record<string, unknown>) => Promise<void>;
   };
+  advertisement?: {
+    isRewardedSupported?: boolean;
+    rewardedState?: string;
+    showRewarded?: () => Promise<void>;
+  };
 }
 
 declare global {
@@ -57,6 +62,13 @@ class PlaygamaPlatformAdapter {
     if (this.isPlaygamaHost) {
       window.bridge?.platform?.sendMessage?.('gameplay_stopped');
     }
+  }
+
+  isRewardedAdsSupported(): boolean {
+    if (!this.isPlaygamaHost || typeof window === 'undefined') {
+      return false;
+    }
+    return Boolean(window.bridge?.advertisement?.isRewardedSupported);
   }
 
   onVisibilityChange(handler: (isHidden: boolean) => void): () => void {

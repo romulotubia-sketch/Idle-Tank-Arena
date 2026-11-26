@@ -54,8 +54,8 @@ export class MachineGunSkill implements CombatSkillModule {
 
       ctx.combat.spawnProjectile({
         kind: 'mg_bullet',
-        x: ctx.tank.position.x + Math.cos(angle) * 28,
-        y: ctx.tank.position.y + Math.sin(angle) * 28,
+        x: ctx.tank.position.x + Math.cos(angle) * 46,
+        y: ctx.tank.position.y + Math.sin(angle) * 46,
         angle,
         speed: spec.speed,
         damage: applySkillDamageBonus(spec.damage, ctx, damageMult),

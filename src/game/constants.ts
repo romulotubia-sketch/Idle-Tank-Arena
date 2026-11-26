@@ -4,6 +4,7 @@ import {
   CurrencyBalances,
   EquipmentSlotType,
   SkillId,
+  SkillRarity,
   TankStats,
   UpgradeEntry,
   WaveState,
@@ -45,15 +46,47 @@ export const SPAWN_CONFIG = {
 export const INITIAL_SKILL_LOADOUT: SkillId[] = [];
 
 export const ALL_SKILL_IDS: SkillId[] = [
+  // Common (5)
   'cannon',
   'machine_gun',
+  'landmines',
+  'piercing_shot',
+  'shockwave',
+  // Uncommon (5)
+  'ricochet',
+  'frost_cannon',
+  'acid_shells',
+  'shrapnel_burst',
+  'shield_pulse',
+  // Rare (6)
   'rocket_barrage',
   'mortar',
-  'railgun',
   'flame_thrower',
+  'cluster_bombs',
+  'hunter_missiles',
+  'gatling_overdrive',
+  // Epic (5)
+  'railgun',
   'tesla',
-  'landmines',
+  'laser_array',
+  'plasma_cannon',
+  'sentry_turret',
+  // Legendary (3)
+  'drone_squadron',
+  'orbital_strike',
+  'thunderstorm',
 ];
+
+export const SKILL_RARITY_ORDER: readonly SkillRarity[] = [
+  'common',
+  'uncommon',
+  'rare',
+  'epic',
+  'legendary',
+];
+
+export const SKILL_SUMMON_RARITY_WEIGHTS =
+  GAME_BALANCE.skillSummon.rarityWeights;
 
 export const INITIAL_WAVE_STATE: WaveState = {
   currentWave: 1,
@@ -106,8 +139,14 @@ export const INITIAL_UPGRADES: UpgradeEntry[] = TANK_UPGRADE_CONFIG.map((cfg) =>
   isMaxed: false,
 }));
 
-export const SKILL_SLOT_COUNT = GAME_BALANCE.skillMerge.slotCount;
-export const MAX_SKILL_LEVEL = GAME_BALANCE.skillMerge.maxSkillLevel;
+export const SKILL_SLOT_COUNT = GAME_BALANCE.skillUpgrade.slotCount;
+export const MAX_SKILL_LEVEL = GAME_BALANCE.skillUpgrade.maxSkillLevel;
+export const MAX_PENDING_COPIES_PER_SKILL =
+  GAME_BALANCE.skillUpgrade.maxPendingCopiesPerSkill;
+export const MAX_LEVEL_OVERFLOW_FRAGMENTS =
+  GAME_BALANCE.skillUpgrade.maxLevelOverflowFragments;
+export const MAX_LEVEL_OVERFLOW_REFUND_RATIO =
+  GAME_BALANCE.skillUpgrade.maxLevelRefundCoinsRatio;
 export const SUMMON_GOLD_COST = GAME_BALANCE.economy.summonCostCoins;
 export const INVENTORY_CAPACITY = GAME_BALANCE.inventory.generalCapacity;
 export const EQUIPMENT_INVENTORY_CAPACITY: number =

@@ -58,6 +58,21 @@ export function AutoForgeSettingsModal({
   const [draft, setDraft] = useState<AutoForgeSettings>(() =>
     cloneAutoForgeSettings(settings)
   );
+  const [statInputs, setStatInputs] = useState<Record<EquipmentStatKey, string>>(
+    () => {
+      const map = {} as Record<EquipmentStatKey, string>;
+      for (const key of EQUIPMENT_STAT_ORDER) {
+        map[key] = String(settings.statFilters[key].minValue);
+      }
+      return map;
+    }
+  );
+  const [maxSpendInput, setMaxSpendInput] = useState<string>(() =>
+    String(settings.maxCoinSpend)
+  );
+  const [minReserveInput, setMinReserveInput] = useState<string>(() =>
+    String(settings.minCoinReserve)
+  );
   const [notice, setNotice] = useState<{
     text: string;
     tone: 'success' | 'error';
@@ -119,7 +134,26 @@ export function AutoForgeSettingsModal({
   };
 
   const handleChangeStatMin = (key: EquipmentStatKey, rawValue: string) => {
+    setStatInputs((prev) => ({ ...prev, [key]: rawValue }));
+    if (rawValue.trim() === '') return;
     const parsed = Number(rawValue);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      setDraft((prev) => ({
+        ...prev,
+        statFilters: {
+          ...prev.statFilters,
+          [key]: {
+            ...prev.statFilters[key],
+            minValue: parsed,
+          },
+        },
+      }));
+    }
+  };
+
+  const handleBlurStatMin = (key: EquipmentStatKey) => {
+    const raw = statInputs[key]?.trim() ?? '';
+    const parsed = raw === '' ? 0 : Number(raw);
     const safeVal =
       Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
     setDraft((prev) => ({
@@ -132,11 +166,22 @@ export function AutoForgeSettingsModal({
         },
       },
     }));
+    setStatInputs((prev) => ({ ...prev, [key]: String(safeVal) }));
   };
 
   const handleReset = () => {
     const reset = onResetSettings();
-    setDraft(cloneAutoForgeSettings(reset ?? createDefaultAutoForgeSettings()));
+    const cloned = cloneAutoForgeSettings(
+      reset ?? createDefaultAutoForgeSettings()
+    );
+    setDraft(cloned);
+    const nextStatInputs = {} as Record<EquipmentStatKey, string>;
+    for (const key of EQUIPMENT_STAT_ORDER) {
+      nextStatInputs[key] = String(cloned.statFilters[key].minValue);
+    }
+    setStatInputs(nextStatInputs);
+    setMaxSpendInput(String(cloned.maxCoinSpend));
+    setMinReserveInput(String(cloned.minCoinReserve));
     setNotice({
       text: 'Auto Forge preferences reset to defaults (gear & progress preserved)',
       tone: 'success',
@@ -144,7 +189,26 @@ export function AutoForgeSettingsModal({
   };
 
   const handleSave = () => {
-    onSaveSettings(draft);
+    const nextDraft = cloneAutoForgeSettings(draft);
+    for (const key of EQUIPMENT_STAT_ORDER) {
+      const raw = statInputs[key]?.trim() ?? '';
+      const parsed = raw === '' ? 0 : Number(raw);
+      nextDraft.statFilters[key].minValue =
+        Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }
+    const maxSpendParsed =
+      maxSpendInput.trim() === '' ? 0 : Number(maxSpendInput);
+    nextDraft.maxCoinSpend =
+      Number.isFinite(maxSpendParsed) && maxSpendParsed >= 0
+        ? Math.floor(maxSpendParsed)
+        : 0;
+    const minReserveParsed =
+      minReserveInput.trim() === '' ? 0 : Number(minReserveInput);
+    nextDraft.minCoinReserve =
+      Number.isFinite(minReserveParsed) && minReserveParsed >= 0
+        ? Math.floor(minReserveParsed)
+        : 0;
+    onSaveSettings(nextDraft);
     onClose();
   };
 
@@ -428,9 +492,10 @@ export function AutoForgeSettingsModal({
                       type="number"
                       min="0"
                       step={stepInfo.step}
-                      value={rule.minValue}
+                      value={statInputs[key] ?? ''}
                       disabled={!rule.enabled}
                       onChange={(e) => handleChangeStatMin(key, e.target.value)}
+                      onBlur={() => handleBlurStatMin(key)}
                       aria-label={`Minimum ${meta.label}`}
                       className={`w-full min-w-0 h-7 px-2 rounded bg-[#0C1015] border font-mono-tabular text-xs font-bold focus:outline-none focus:border-sky-400 ${
                         rule.enabled
@@ -488,16 +553,28 @@ export function AutoForgeSettingsModal({
                   min="0"
                   step="60"
                   disabled={!draft.spendingLimitEnabled}
-                  value={draft.maxCoinSpend}
+                  value={maxSpendInput}
                   onChange={(e) => {
-                    const parsed = Number(e.target.value);
-                    setDraft((prev) => ({
-                      ...prev,
-                      maxCoinSpend:
-                        Number.isFinite(parsed) && parsed >= 0
-                          ? Math.floor(parsed)
-                          : 0,
-                    }));
+                    const raw = e.target.value;
+                    setMaxSpendInput(raw);
+                    if (raw.trim() === '') return;
+                    const parsed = Number(raw);
+                    if (Number.isFinite(parsed) && parsed >= 0) {
+                      setDraft((prev) => ({
+                        ...prev,
+                        maxCoinSpend: Math.floor(parsed),
+                      }));
+                    }
+                  }}
+                  onBlur={() => {
+                    const raw = maxSpendInput.trim();
+                    const parsed = raw === '' ? 0 : Number(raw);
+                    const safeVal =
+                      Number.isFinite(parsed) && parsed >= 0
+                        ? Math.floor(parsed)
+                        : 0;
+                    setDraft((prev) => ({ ...prev, maxCoinSpend: safeVal }));
+                    setMaxSpendInput(String(safeVal));
                   }}
                   aria-label="Maximum Coins to spend per Auto Forge session"
                   className={`w-full h-8 px-2 rounded bg-[#0C1015] border font-mono-tabular text-xs font-bold focus:outline-none focus:border-amber-400 ${
@@ -527,16 +604,28 @@ export function AutoForgeSettingsModal({
                   type="number"
                   min="0"
                   step="50"
-                  value={draft.minCoinReserve}
+                  value={minReserveInput}
                   onChange={(e) => {
-                    const parsed = Number(e.target.value);
-                    setDraft((prev) => ({
-                      ...prev,
-                      minCoinReserve:
-                        Number.isFinite(parsed) && parsed >= 0
-                          ? Math.floor(parsed)
-                          : 0,
-                    }));
+                    const raw = e.target.value;
+                    setMinReserveInput(raw);
+                    if (raw.trim() === '') return;
+                    const parsed = Number(raw);
+                    if (Number.isFinite(parsed) && parsed >= 0) {
+                      setDraft((prev) => ({
+                        ...prev,
+                        minCoinReserve: Math.floor(parsed),
+                      }));
+                    }
+                  }}
+                  onBlur={() => {
+                    const raw = minReserveInput.trim();
+                    const parsed = raw === '' ? 0 : Number(raw);
+                    const safeVal =
+                      Number.isFinite(parsed) && parsed >= 0
+                        ? Math.floor(parsed)
+                        : 0;
+                    setDraft((prev) => ({ ...prev, minCoinReserve: safeVal }));
+                    setMinReserveInput(String(safeVal));
                   }}
                   aria-label="Minimum Coin reserve to retain"
                   className="w-full h-8 px-2 rounded bg-[#0C1015] border border-emerald-500/40 font-mono-tabular text-xs font-bold text-emerald-200 focus:outline-none focus:border-emerald-400"
@@ -548,28 +637,28 @@ export function AutoForgeSettingsModal({
       </div>
 
       {/* Footer Actions */}
-      <footer className="shrink-0 px-3 py-2 border-t border-white/10 bg-[#18202A] flex items-center justify-between gap-2">
+      <footer className="shrink-0 px-2.5 sm:px-3 py-2 border-t border-white/10 bg-[#18202A] flex items-center justify-between gap-1.5 sm:gap-2">
         <button
           type="button"
           onClick={handleReset}
-          className="h-9 px-3 rounded-lg bg-[#222B37] hover:bg-[#2C3746] border border-rose-500/40 text-xs font-bold text-rose-200 flex items-center gap-1.5 transition-colors active:scale-95 cursor-pointer"
+          className="h-9 px-2.5 sm:px-3 rounded-lg bg-[#222B37] hover:bg-[#2C3746] border border-rose-500/40 text-[11px] sm:text-xs font-bold text-rose-200 flex items-center gap-1.5 transition-colors active:scale-95 cursor-pointer whitespace-nowrap"
         >
           <RotateCcw className="w-3.5 h-3.5 shrink-0" />
           <span>Reset Settings</span>
         </button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <button
             type="button"
             onClick={onClose}
-            className="h-9 px-3 rounded-lg bg-[#202934] hover:bg-[#2A3646] border border-white/15 text-xs font-bold text-slate-200 transition-colors active:scale-95 cursor-pointer"
+            className="h-9 px-2.5 sm:px-3 rounded-lg bg-[#202934] hover:bg-[#2A3646] border border-white/15 text-[11px] sm:text-xs font-bold text-slate-200 transition-colors active:scale-95 cursor-pointer whitespace-nowrap"
           >
             Close
           </button>
           <button
             type="button"
             onClick={handleSave}
-            className="h-9 px-3.5 rounded-lg bg-amber-500 hover:bg-amber-400 border border-amber-300/70 text-xs font-extrabold text-slate-950 flex items-center gap-1.5 shadow-md transition-colors active:scale-95 cursor-pointer"
+            className="h-9 px-3 sm:px-3.5 rounded-lg bg-amber-500 hover:bg-amber-400 border border-amber-300/70 text-[11px] sm:text-xs font-extrabold text-slate-950 flex items-center gap-1.5 shadow-md transition-colors active:scale-95 cursor-pointer whitespace-nowrap"
           >
             <Save className="w-3.5 h-3.5 shrink-0" />
             <span>Save Settings</span>

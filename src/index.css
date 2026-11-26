@@ -81,24 +81,23 @@
   animation: toast-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@keyframes merge-invalid {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-  20% {
-    transform: translateX(-4px);
+@keyframes skill-upgrade {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.75);
   }
   45% {
-    transform: translateX(4px);
+    transform: scale(1.08);
+    box-shadow: 0 0 18px 3px rgba(52, 211, 153, 0.55);
   }
-  70% {
-    transform: translateX(-3px);
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
   }
 }
 
-.animate-merge-invalid {
-  animation: merge-invalid 320ms ease-out;
+.animate-skill-upgrade {
+  animation: skill-upgrade 460ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes coin-gain {
@@ -123,8 +122,19 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-summon-pop,
   .animate-toast-in,
-  .animate-merge-invalid,
+  .animate-skill-upgrade,
   .animate-coin-gain {
     animation: none !important;
   }
+}
+
+[data-graphics='low'] .animate-summon-pop,
+[data-graphics='low'] .animate-toast-in,
+[data-graphics='low'] .animate-skill-upgrade,
+[data-graphics='low'] .animate-coin-gain {
+  animation: none !important;
+}
+
+[data-graphics='low'] .backdrop-blur-\[2px\] {
+  backdrop-filter: none !important;
 }

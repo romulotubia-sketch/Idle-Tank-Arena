@@ -220,6 +220,22 @@ export class EnemySystem {
     return false;
   }
 
+  applySlow(enemy: EnemyInstance, slowFactor: number, durationSec: number): void {
+    if (enemy.isDying || enemy.hp <= 0) return;
+    const clampedFactor = Math.max(0, Math.min(0.75, slowFactor));
+    enemy.slowFactor = Math.max(enemy.slowFactor ?? 0, clampedFactor);
+    enemy.slowTimer = Math.max(enemy.slowTimer ?? 0, durationSec);
+  }
+
+  applyAcid(enemy: EnemyInstance, acidDps: number, durationSec: number): void {
+    if (enemy.isDying || enemy.hp <= 0) return;
+    enemy.acidDps = Math.max(enemy.acidDps ?? 0, Math.max(1, acidDps));
+    enemy.acidTimer = Math.max(enemy.acidTimer ?? 0, durationSec);
+    if (enemy.acidTickTimer === undefined || enemy.acidTickTimer <= 0) {
+      enemy.acidTickTimer = 0.45;
+    }
+  }
+
   update(
     dt: number,
     bounds: ArenaBounds,
@@ -273,6 +289,13 @@ export class EnemySystem {
           this.activeEnemies[writeIndex++] = enemy;
         }
         continue;
+      }
+
+      if (enemy.slowTimer && enemy.slowTimer > 0) {
+        enemy.slowTimer = Math.max(0, enemy.slowTimer - dt);
+        if (enemy.slowTimer <= 0) {
+          enemy.slowFactor = 0;
+        }
       }
 
       const dx = playerPos.x - enemy.position.x;
@@ -338,7 +361,7 @@ export class EnemySystem {
               (shotIdx - Math.floor(BOSS_CONFIG.burstShotCount / 2)) *
               BOSS_CONFIG.burstSpreadRad;
             const shotAngle = enemy.angle + spreadOffset;
-            const muzzleDist = enemy.radius + 16;
+            const muzzleDist = enemy.radius + 24;
             callbacks.onAttackPlayer({
               enemyX: enemy.position.x + Math.cos(shotAngle) * muzzleDist,
               enemyY: enemy.position.y + Math.sin(shotAngle) * muzzleDist,
@@ -432,7 +455,11 @@ export class EnemySystem {
     bounds: ArenaBounds,
     callbacks: EnemyUpdateCallbacks
   ): void {
-    const step = enemy.speed * dt;
+    const slowMult =
+      enemy.slowTimer && enemy.slowTimer > 0
+        ? Math.max(0.25, 1 - (enemy.slowFactor ?? 0))
+        : 1;
+    const step = enemy.speed * slowMult * dt;
 
     if (enemy.behavior === 'artillery_ranged') {
       const minComfort = enemy.preferredMinRange;
@@ -476,7 +503,7 @@ export class EnemySystem {
         enemy.attackCooldown -= dt;
         if (enemy.attackCooldown <= 0) {
           enemy.attackCooldown = enemy.attackIntervalSec;
-          const barrelTip = enemy.radius + 16;
+          const barrelTip = enemy.radius + 26;
           callbacks.onAttackPlayer({
             enemyX: enemy.position.x + dirX * barrelTip,
             enemyY: enemy.position.y + dirY * barrelTip,
@@ -504,7 +531,7 @@ export class EnemySystem {
       enemy.attackCooldown -= dt;
       if (enemy.attackCooldown <= 0) {
         enemy.attackCooldown = enemy.attackIntervalSec;
-        const muzzleOffset = enemy.isBoss ? enemy.radius + 16 : enemy.radius;
+        const muzzleOffset = enemy.isBoss ? enemy.radius + 24 : enemy.radius + 4;
         callbacks.onAttackPlayer({
           enemyX: enemy.position.x + dirX * muzzleOffset,
           enemyY: enemy.position.y + dirY * muzzleOffset,

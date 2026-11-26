@@ -43,8 +43,8 @@ export class RailgunSkill implements CombatSkillModule {
       target.position.y - ctx.tank.position.y,
       target.position.x - ctx.tank.position.x
     );
-    const startX = ctx.tank.position.x + Math.cos(angle) * 34;
-    const startY = ctx.tank.position.y + Math.sin(angle) * 34;
+    const startX = ctx.tank.position.x + Math.cos(angle) * 56;
+    const startY = ctx.tank.position.y + Math.sin(angle) * 56;
     const beamEndX = ctx.tank.position.x + Math.cos(angle) * spec.range;
     const beamEndY = ctx.tank.position.y + Math.sin(angle) * spec.range;
 

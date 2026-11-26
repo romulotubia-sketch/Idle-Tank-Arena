@@ -34,7 +34,7 @@ export class LandmineSkill implements CombatSkillModule {
     for (let i = 0; i < spec.deployCount; i++) {
       // Deploy at a safe perimeter ring around the tank (never directly on the tank!)
       const angle = Math.random() * Math.PI * 2;
-      const dist = 78 + Math.random() * 140;
+      const dist = 88 + Math.random() * 135;
       const rawX = ctx.tank.position.x + Math.cos(angle) * dist;
       const rawY = ctx.tank.position.y + Math.sin(angle) * dist;
 
@@ -42,7 +42,7 @@ export class LandmineSkill implements CombatSkillModule {
       const y = Math.max(pad, Math.min(ctx.bounds.height - pad, rawY));
 
       // Double-check safe clearance from tank body
-      if (Math.hypot(x - ctx.tank.position.x, y - ctx.tank.position.y) < 58) {
+      if (Math.hypot(x - ctx.tank.position.x, y - ctx.tank.position.y) < 68) {
         continue;
       }
 

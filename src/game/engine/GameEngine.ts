@@ -28,14 +28,24 @@ import {
   SkillCollectionSystem,
   SkillCollectionUpgradeResult,
 } from '../systems/SkillCollectionSystem';
-import { MergeAttemptResult, SkillMergeSystem } from '../systems/SkillMergeSystem';
 import { SkillSummonSystem, SummonAttemptResult } from '../systems/SkillSummonSystem';
 import { SkillSystem } from '../systems/SkillSystem';
+import {
+  ApplyPendingUpgradeResult,
+  DirectUpgradeStepResult,
+  ReplaceWithPendingResult,
+  SkillUpgradeSystem,
+} from '../systems/SkillUpgradeSystem';
 import { TankSystem } from '../systems/TankSystem';
 import { UpgradePurchaseResult, UpgradeSystem } from '../systems/UpgradeSystem';
 import { WaveSystem } from '../systems/WaveSystem';
 import {
+  MonetizationRewardGrantResult,
+  MonetizationSystem,
+} from '../monetization/MonetizationSystem';
+import {
   AutoForgeSettings,
+  AutoUpgradeSettings,
   BattleRecoveryState,
   BattleSummary,
   BossHudState,
@@ -44,6 +54,9 @@ import {
   EquipmentSlotType,
   GameHudSnapshot,
   GamePhase,
+  GameSettingsState,
+  GraphicsQuality,
+  MonetizationOfferId,
   OfflineRewardSummary,
   SaveStatusNotice,
   SkillId,
@@ -63,19 +76,25 @@ export class GameEngine {
   readonly skills = new SkillSystem();
   readonly skillCollection = new SkillCollectionSystem();
   readonly skillSummon = new SkillSummonSystem();
-  readonly skillMerge = new SkillMergeSystem();
+  readonly skillUpgrade = new SkillUpgradeSystem();
   readonly waves = new WaveSystem();
   readonly currencies = new CurrencySystem();
   readonly upgrades = new UpgradeSystem();
   readonly equipment = new EquipmentSystem();
   readonly forge = new ForgeSystem();
   readonly inventory = new InventorySystem();
+  readonly monetization = new MonetizationSystem();
   readonly saveSystem = new SaveSystem();
 
   private readonly renderer: Renderer;
+  private attachedCanvas: HTMLCanvasElement | null = null;
   private phase: GamePhase = 'TITLE';
   private showRangeRing = true;
   private soundEnabled = true;
+  private soundVolume = 0.75;
+  private musicEnabled = true;
+  private musicVolume = 0.4;
+  private graphicsQuality: GraphicsQuality = 'high';
   private reducedMotion = false;
   private battleStats: BattleSummary = {
     enemiesDefeated: 0,
@@ -100,6 +119,7 @@ export class GameEngine {
   private readonly recoveryTotalSec = GAME_BALANCE.battleRecovery.delaySec;
   private recoveryHudAccumulator = 0;
   private lastBossAnnouncedWave = 0;
+  private forgePanelOpen = false;
   private listeners = new Set<SnapshotListener>();
 
   constructor() {
@@ -110,6 +130,7 @@ export class GameEngine {
     if (typeof window !== 'undefined' && window.matchMedia) {
       this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     }
+    this.applySettingsToSubsystems();
   }
 
   getCamera() {
@@ -135,8 +156,22 @@ export class GameEngine {
       this.equipment.loadState(saved.equipment);
       this.forge.loadState(saved.forge);
       this.skillCollection.loadState(saved.skillCollection);
+      this.skills.loadState(saved.skillSlots, this.skillCollection);
+      this.skillUpgrade.loadState(saved.pendingSkills, saved.autoUpgrade);
+      if (this.skillUpgrade.isAutoUpgradeEnabled()) {
+        this.skillUpgrade.runAutoUpgradePass(this.skills, this.skillCollection);
+      }
+      this.monetization.loadState(saved.monetization);
       this.soundEnabled = saved.soundEnabled;
+      this.soundVolume =
+        typeof saved.soundVolume === 'number' ? saved.soundVolume : 0.75;
+      this.musicEnabled =
+        typeof saved.musicEnabled === 'boolean' ? saved.musicEnabled : true;
+      this.musicVolume =
+        typeof saved.musicVolume === 'number' ? saved.musicVolume : 0.4;
+      this.graphicsQuality = saved.graphicsQuality === 'low' ? 'low' : 'high';
       this.showRangeRing = saved.showRangeRing;
+      this.applySettingsToSubsystems();
       this.lastOfflineRewardAt =
         typeof saved.lastOfflineRewardAt === 'number' &&
         Number.isFinite(saved.lastOfflineRewardAt) &&
@@ -144,7 +179,7 @@ export class GameEngine {
           ? saved.lastOfflineRewardAt
           : saved.savedAt;
 
-      // Always initialize a clean battlefield using saved permanent progression
+      // Always initialize a clean battlefield using saved permanent progression & equipped skills
       this.prepareCleanBattlefield({ resetWaveToOne: false });
 
       if (!this.claimedOfflineSources.has(this.lastOfflineRewardAt)) {
@@ -159,7 +194,22 @@ export class GameEngine {
     } else {
       this.lastOfflineRewardAt = Date.now();
       this.pendingOfflineReward = null;
+      this.applySettingsToSubsystems();
     }
+  }
+
+  private isEffectsMotionReduced(): boolean {
+    return this.reducedMotion || this.graphicsQuality === 'low';
+  }
+
+  private applySettingsToSubsystems(): void {
+    soundEffects.setEnabled(this.soundEnabled);
+    soundEffects.setSoundVolume(this.soundVolume);
+    soundEffects.setMusicEnabled(this.musicEnabled);
+    soundEffects.setMusicVolume(this.musicVolume);
+    soundEffects.syncMusicPlayback(this.phase === 'ACTIVE');
+    this.combat.setPerformanceMode(this.graphicsQuality === 'low');
+    this.renderer.setGraphicsQuality(this.graphicsQuality, this.attachedCanvas);
   }
 
   private recomputeCombinedTankStats(): TankStats {
@@ -170,12 +220,15 @@ export class GameEngine {
   }
 
   attachCanvas(canvas: HTMLCanvasElement): void {
+    this.attachedCanvas = canvas;
+    this.renderer.setGraphicsQuality(this.graphicsQuality);
     this.renderer.attach(canvas);
     this.startLoop();
   }
 
   detachCanvas(): void {
     this.stopLoop();
+    this.attachedCanvas = null;
     this.renderer.detach();
   }
 
@@ -232,6 +285,9 @@ export class GameEngine {
       battle: { ...this.battleStats },
       upgrades: this.upgrades.getEntries(),
       skillSlots: this.skills.getSlots(),
+      pendingSkills: this.skillUpgrade.getPendingSkills(),
+      pendingSkillCount: this.skillUpgrade.getPendingCount(),
+      autoUpgrade: this.skillUpgrade.getState(),
       skillCollection: this.skillCollection.getAllEntries(),
       unlockedSkillCount: this.skillCollection.getUnlockedCount(),
       equipmentSlots: this.equipment.getSlots(),
@@ -244,11 +300,18 @@ export class GameEngine {
       inventoryCapacity: this.inventory.getCapacity(),
       inventorySlots: this.inventory.getSlots(),
       showRangeRing: this.showRangeRing,
+      settings: this.getSettings(),
       summonCost: this.skillSummon.getCost(),
       hasVacantSkillSlot: this.skills.hasVacantSlot(),
       offlineReward: this.pendingOfflineReward
         ? { ...this.pendingOfflineReward }
         : null,
+      monetization: this.monetization.getSnapshot(
+        waveState.currentWave,
+        this.pendingOfflineReward && !this.pendingOfflineReward.claimed
+          ? this.pendingOfflineReward.coinsEarned
+          : null
+      ),
       saveNotice: this.saveNotice ? { ...this.saveNotice } : null,
     };
   }
@@ -264,6 +327,27 @@ export class GameEngine {
     const result = this.skillSummon.summonRandomSkill(
       this.currencies,
       this.skills,
+      this.skillCollection,
+      this.skillUpgrade
+    );
+    if (result.success) {
+      void this.persist();
+      this.emitSnapshot();
+    }
+    return result;
+  }
+
+  equipPendingSkillToSlot(
+    slotIndex: number,
+    skillId: SkillId
+  ): ReplaceWithPendingResult {
+    if (this.phase !== 'ACTIVE') {
+      return { success: false, reason: 'invalid_slot' };
+    }
+    const result = this.skillUpgrade.equipOrReplacePendingSkill(
+      slotIndex,
+      skillId,
+      this.skills,
       this.skillCollection
     );
     if (result.success) {
@@ -273,18 +357,13 @@ export class GameEngine {
     return result;
   }
 
-  mergeSkills(
-    firstSlotIndex: number,
-    secondSlotIndex: number
-  ): MergeAttemptResult {
+  applyPendingSkillUpgrade(skillId: SkillId): ApplyPendingUpgradeResult {
     if (this.phase !== 'ACTIVE') {
-      return { success: false, reason: 'not_active' };
+      return { success: false, reason: 'not_equipped' };
     }
-    const result = this.skillMerge.mergeSlots(
+    const result = this.skillUpgrade.applyPendingUpgradeToEquipped(
+      skillId,
       this.skills,
-      firstSlotIndex,
-      secondSlotIndex,
-      performance.now(),
       this.skillCollection
     );
     if (result.success) {
@@ -292,9 +371,88 @@ export class GameEngine {
       this.emitSnapshot();
     }
     return result;
+  }
+
+  convertPendingOverflow(
+    skillId: SkillId,
+    count?: number
+  ): { convertedCopies: number; fragmentsAwarded: number } {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { convertedCopies: 0, fragmentsAwarded: 0 };
+    }
+    const res = this.skillUpgrade.convertPendingToFragments(
+      skillId,
+      this.skillCollection,
+      count
+    );
+    if (res.convertedCopies > 0) {
+      void this.persist();
+      this.emitSnapshot();
+    }
+    return res;
+  }
+
+  discardPendingSkill(skillId: SkillId, count?: number): number {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return 0;
+    }
+    const removed = this.skillUpgrade.discardPendingSkill(skillId, count);
+    if (removed > 0) {
+      void this.persist();
+      this.emitSnapshot();
+    }
+    return removed;
+  }
+
+  toggleAutoUpgrade(enable?: boolean): {
+    enabled: boolean;
+    upgrades: DirectUpgradeStepResult[];
+  } {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { enabled: this.skillUpgrade.isAutoUpgradeEnabled(), upgrades: [] };
+    }
+    const target =
+      enable !== undefined ? enable : !this.skillUpgrade.isAutoUpgradeEnabled();
+    const res = this.skillUpgrade.setAutoUpgradeEnabled(
+      target,
+      this.skills,
+      this.skillCollection
+    );
+    void this.persist();
+    this.emitSnapshot();
+    return res;
+  }
+
+  updateAutoUpgradeSettings(
+    partial: Partial<AutoUpgradeSettings>
+  ): { settings: AutoUpgradeSettings; upgrades: DirectUpgradeStepResult[] } {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { settings: this.skillUpgrade.getSettings(), upgrades: [] };
+    }
+    const res = this.skillUpgrade.updateSettings(
+      partial,
+      this.skills,
+      this.skillCollection
+    );
+    void this.persist();
+    this.emitSnapshot();
+    return res;
+  }
+
+  resetAutoUpgradeSettings(): AutoUpgradeSettings {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return this.skillUpgrade.getSettings();
+    }
+    const reset = this.skillUpgrade.resetSettings();
+    void this.persist();
+    this.emitSnapshot();
+    return reset;
   }
 
   upgradeSkillCollection(skillId: SkillId): SkillCollectionUpgradeResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false, reason: 'cooldown_locked' };
+    }
     const result = this.skillCollection.upgradeSkill(skillId);
     if (result.success) {
       this.skills.refreshCooldowns(this.skillCollection);
@@ -319,6 +477,9 @@ export class GameEngine {
   }
 
   equipItem(uid: string, expectedSlot?: EquipmentSlotType): EquipActionResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false, reason: 'not_found' };
+    }
     const result = this.equipment.equipItem(uid, expectedSlot);
     if (result.success) {
       const nextStats = this.recomputeCombinedTankStats();
@@ -330,6 +491,9 @@ export class GameEngine {
   }
 
   unequipEquipmentSlot(slot: EquipmentSlotType): EquipActionResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false, reason: 'slot_empty' };
+    }
     const result = this.equipment.unequipSlot(slot);
     if (result.success) {
       const nextStats = this.recomputeCombinedTankStats();
@@ -341,6 +505,9 @@ export class GameEngine {
   }
 
   toggleEquipmentLock(uid: string): { success: boolean; item?: EquipmentItem } {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false };
+    }
     const result = this.equipment.toggleLock(uid);
     if (result.success) {
       void this.persist();
@@ -359,6 +526,9 @@ export class GameEngine {
   }
 
   dismantleEquipmentItem(uid: string): DismantleItemResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false, reason: 'not_found' };
+    }
     const result = this.equipment.dismantleItem(uid, this.currencies);
     if (result.success) {
       void this.persist();
@@ -368,6 +538,15 @@ export class GameEngine {
   }
 
   bulkDismantleEquipment(uids: readonly string[]): BulkDismantleResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return {
+        success: false,
+        dismantledCount: 0,
+        skippedCount: 0,
+        coinsAwarded: 0,
+        dismantledUids: [],
+      };
+    }
     const result = this.equipment.bulkDismantle(uids, this.currencies);
     if (result.success) {
       void this.persist();
@@ -401,6 +580,9 @@ export class GameEngine {
   }
 
   equipForgedItem(): ForgeEquipResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false, reason: 'no_pending_item' };
+    }
     const result = this.forge.resolveEquip(this.equipment);
     if (result.success) {
       const nextStats = this.recomputeCombinedTankStats();
@@ -412,6 +594,9 @@ export class GameEngine {
   }
 
   dismantleForgedItem(): ForgeDismantleResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false, reason: 'no_pending_item' };
+    }
     const result = this.forge.resolveDismantle(this.currencies);
     if (result.success) {
       void this.persist();
@@ -421,6 +606,9 @@ export class GameEngine {
   }
 
   keepForgedItemInInventory(): ForgeKeepResult {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return { success: false, reason: 'no_pending_item' };
+    }
     const result = this.forge.resolveKeepInInventory(this.equipment);
     if (result.success) {
       void this.persist();
@@ -458,6 +646,9 @@ export class GameEngine {
   updateAutoForgeSettings(
     partial: Partial<AutoForgeSettings>
   ): AutoForgeSettings {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return this.forge.autoForge.getSettings();
+    }
     const updated = this.forge.updateAutoForgeSettings(partial);
     void this.persist();
     this.emitSnapshot();
@@ -465,10 +656,17 @@ export class GameEngine {
   }
 
   resetAutoForgeSettings(): AutoForgeSettings {
+    if (this.phase === 'DEFEAT' || this.phase === 'TITLE') {
+      return this.forge.autoForge.getSettings();
+    }
     const reset = this.forge.resetAutoForgeSettings();
     void this.persist();
     this.emitSnapshot();
     return reset;
+  }
+
+  setForgePanelOpen(open: boolean): void {
+    this.forgePanelOpen = Boolean(open);
   }
 
   setPhase(nextPhase: GamePhase): void {
@@ -478,7 +676,12 @@ export class GameEngine {
 
     if (nextPhase !== 'ACTIVE') {
       this.tank.setMoveInput(0, 0);
+      this.forgePanelOpen = false;
+    } else if (typeof performance !== 'undefined') {
+      this.lastTimestamp = performance.now();
     }
+
+    soundEffects.syncMusicPlayback(nextPhase === 'ACTIVE');
 
     if (nextPhase === 'ACTIVE') {
       playgamaBridge.notifyGameplayStart();
@@ -516,10 +719,13 @@ export class GameEngine {
     this.tank.resetForBattle(center.x, center.y);
     this.enemies.clear();
     this.combat.clear();
-    this.skills.resetToEmpty();
     if (options.resetWaveToOne) {
+      this.skills.resetToEmpty();
+      this.skillUpgrade.clearPendingSkills();
       this.waves.resetForNewRun();
     } else {
+      // Preserve equipped battlefield skills & pending queue, reset cooldowns for a clean start
+      this.skills.resetCooldowns(this.skillCollection);
       // Refresh current wave spawn plan with clean enemy/transition counters
       this.waves.restartWave(this.waves.getState().currentWave);
     }
@@ -537,6 +743,8 @@ export class GameEngine {
   resetBattleState(): void {
     this.isRecovering = false;
     this.recoveryRemainingSec = 0;
+    this.monetization.clearTransientBoost();
+    this.tank.setTransientAttackMultiplier(1);
     this.prepareCleanBattlefield({ resetWaveToOne: true });
   }
 
@@ -545,6 +753,9 @@ export class GameEngine {
     this.recoveryRemainingSec = 0;
     this.prepareCleanBattlefield({ resetWaveToOne: false });
     this.phase = 'ACTIVE';
+    if (typeof performance !== 'undefined') {
+      this.lastTimestamp = performance.now();
+    }
     const currentWave = this.waves.getState();
     if (currentWave.isBossWave) {
       this.enemies.resetSpawnTimer(0.55);
@@ -553,6 +764,8 @@ export class GameEngine {
     if (this.forge.consumePendingAutoResume()) {
       this.forge.enableAutoForge(this.currencies, this.equipment);
     }
+    soundEffects.unlockAudio();
+    soundEffects.syncMusicPlayback(true);
     playgamaBridge.notifyGameplayStart();
     void this.persist();
     this.emitSnapshot();
@@ -563,11 +776,15 @@ export class GameEngine {
     this.recoveryRemainingSec = 0;
     this.prepareCleanBattlefield({ resetWaveToOne: false });
     this.phase = 'ACTIVE';
+    if (typeof performance !== 'undefined') {
+      this.lastTimestamp = performance.now();
+    }
     const currentWave = this.waves.getState();
     if (currentWave.isBossWave) {
       this.enemies.resetSpawnTimer(0.55);
       this.announceBossIncoming(currentWave.currentWave);
     }
+    soundEffects.syncMusicPlayback(true);
     playgamaBridge.notifyGameplayStart();
     void this.persist();
     this.emitSnapshot();
@@ -579,6 +796,7 @@ export class GameEngine {
     this.prepareCleanBattlefield({ resetWaveToOne: false });
     this.phase = 'TITLE';
     this.tank.setMoveInput(0, 0);
+    soundEffects.syncMusicPlayback(false);
     playgamaBridge.notifyGameplayStop();
     void this.persist();
     this.emitSnapshot();
@@ -596,11 +814,12 @@ export class GameEngine {
     this.tank.setMoveInput(0, 0);
     this.enemies.clear();
     this.combat.clear();
-    this.skills.resetToEmpty();
+    this.skills.resetCooldowns(this.skillCollection);
     this.lastWaveEvent = null;
     this.playerDamageFlashTimer = 0;
     this.phase = 'DEFEAT';
 
+    soundEffects.syncMusicPlayback(false);
     soundEffects.playDefeat();
     playgamaBridge.notifyGameplayStop();
 
@@ -628,6 +847,7 @@ export class GameEngine {
       this.announceBossIncoming(waveToReplay);
     }
 
+    soundEffects.syncMusicPlayback(true);
     soundEffects.playDeploy();
     playgamaBridge.notifyGameplayStart();
     this.emitSnapshot();
@@ -661,6 +881,39 @@ export class GameEngine {
     return { success: true, coinsAwarded: reward.coinsEarned };
   }
 
+  requestPreparedMonetizationOffer(
+    offerId: MonetizationOfferId
+  ): MonetizationRewardGrantResult {
+    return this.monetization.tryRequestPreparedOffer(offerId, {
+      baseOfflineCoins: this.pendingOfflineReward?.coinsEarned,
+      wave: this.waves.getState().currentWave,
+    });
+  }
+
+  applyVerifiedMonetizationReward(
+    offerId: MonetizationOfferId,
+    baseOfflineCoins?: number
+  ): MonetizationRewardGrantResult {
+    const grant = this.monetization.applyVerifiedReward(offerId, {
+      baseOfflineCoins:
+        baseOfflineCoins ?? this.pendingOfflineReward?.coinsEarned,
+      wave: this.waves.getState().currentWave,
+    });
+    if (!grant.granted) {
+      return grant;
+    }
+
+    if (grant.bonusCoinsAwarded > 0) {
+      this.currencies.add('gold', grant.bonusCoinsAwarded);
+    }
+    this.tank.setTransientAttackMultiplier(
+      this.monetization.getAttackPowerMultiplier()
+    );
+    void this.persist();
+    this.emitSnapshot();
+    return grant;
+  }
+
   dismissSaveNotice(options?: { overwriteCorruptWithFresh?: boolean }): void {
     this.saveNotice = null;
     if (options?.overwriteCorruptWithFresh) {
@@ -675,6 +928,17 @@ export class GameEngine {
     this.emitSnapshot();
   }
 
+  getSettings(): GameSettingsState {
+    return {
+      soundEnabled: this.soundEnabled,
+      soundVolume: this.soundVolume,
+      musicEnabled: this.musicEnabled,
+      musicVolume: this.musicVolume,
+      graphicsQuality: this.graphicsQuality,
+      showRangeRing: this.showRangeRing,
+    };
+  }
+
   toggleRangeRing(): void {
     this.showRangeRing = !this.showRangeRing;
     void this.persist();
@@ -682,12 +946,52 @@ export class GameEngine {
   }
 
   setSoundEnabled(enabled: boolean): void {
-    this.soundEnabled = enabled;
+    this.soundEnabled = Boolean(enabled);
+    this.applySettingsToSubsystems();
     void this.persist();
+    this.emitSnapshot();
   }
 
   isSoundEnabled(): boolean {
     return this.soundEnabled;
+  }
+
+  setSoundVolume(volume: number): void {
+    const clamped = Number.isFinite(volume)
+      ? Math.max(0, Math.min(1, Math.round(volume * 100) / 100))
+      : 0.75;
+    this.soundVolume = clamped;
+    this.applySettingsToSubsystems();
+    void this.persist();
+    this.emitSnapshot();
+  }
+
+  setMusicEnabled(enabled: boolean): void {
+    this.musicEnabled = Boolean(enabled);
+    this.applySettingsToSubsystems();
+    void this.persist();
+    this.emitSnapshot();
+  }
+
+  setMusicVolume(volume: number): void {
+    const clamped = Number.isFinite(volume)
+      ? Math.max(0, Math.min(1, Math.round(volume * 100) / 100))
+      : 0.4;
+    this.musicVolume = clamped;
+    this.applySettingsToSubsystems();
+    void this.persist();
+    this.emitSnapshot();
+  }
+
+  setGraphicsQuality(quality: GraphicsQuality): void {
+    this.graphicsQuality = quality === 'low' ? 'low' : 'high';
+    if (this.graphicsQuality === 'low') {
+      this.playerDamageFlashTimer = 0;
+      this.renderer.getCamera().resetEffects();
+    }
+    this.applySettingsToSubsystems();
+    void this.persist();
+    this.emitSnapshot();
   }
 
   async persistIfDirty(): Promise<void> {
@@ -711,7 +1015,15 @@ export class GameEngine {
         equipment: this.equipment.exportState(),
         forge: this.forge.exportState(),
         skillCollection: this.skillCollection.exportState(),
+        skillSlots: this.skills.exportState(),
+        pendingSkills: this.skillUpgrade.exportPendingSkills(),
+        autoUpgrade: this.skillUpgrade.exportAutoUpgradeState(),
+        monetization: this.monetization.exportState(),
         soundEnabled: this.soundEnabled,
+        soundVolume: this.soundVolume,
+        musicEnabled: this.musicEnabled,
+        musicVolume: this.musicVolume,
+        graphicsQuality: this.graphicsQuality,
         showRangeRing: this.showRangeRing,
       },
       options
@@ -731,7 +1043,7 @@ export class GameEngine {
     const dt = Math.max(0, Math.min(rawDt, 0.1));
 
     if (this.phase === 'DEFEAT') {
-      this.renderer.getCamera().update(dt, this.reducedMotion);
+      this.renderer.getCamera().update(dt, this.isEffectsMotionReduced());
       if (!this.isRecovering) {
         this.isRecovering = true;
         this.recoveryWave = Math.max(1, this.waves.getState().currentWave);
@@ -765,8 +1077,16 @@ export class GameEngine {
     let hudDirty = false;
     let playerDefeated = false;
 
+    const monetizationTicked = this.monetization.update(dt, true);
+    this.tank.setTransientAttackMultiplier(
+      this.monetization.getAttackPowerMultiplier()
+    );
+    if (monetizationTicked && this.monetization.getActiveBoostState().active) {
+      hudDirty = true;
+    }
+
     this.battlefield.update(dt);
-    this.renderer.getCamera().update(dt, this.reducedMotion);
+    this.renderer.getCamera().update(dt, this.isEffectsMotionReduced());
     if (this.playerDamageFlashTimer > 0) {
       this.playerDamageFlashTimer = Math.max(0, this.playerDamageFlashTimer - dt);
     }
@@ -812,6 +1132,13 @@ export class GameEngine {
         autoOutcome.startedNextForge ||
         autoOutcome.stoppedReason
       ) {
+        if (autoOutcome.kept && autoOutcome.item) {
+          soundEffects.playForgeComplete(
+            EQUIPMENT_RARITY_CONFIG[autoOutcome.item.rarity].tier
+          );
+        } else if (autoOutcome.dismantled) {
+          soundEffects.playDismantle();
+        }
         if (autoOutcome.stoppedReason && autoOutcome.stoppedReason !== 'manual') {
           soundEffects.playInvalid();
         }
@@ -836,7 +1163,7 @@ export class GameEngine {
         },
         onBossSpawned: (boss) => {
           this.combat.spawnBossIntroEffect(boss.position.x, boss.position.y);
-          this.renderer.getCamera().addKick(2.4, this.reducedMotion);
+          this.renderer.getCamera().addKick(2.4, this.isEffectsMotionReduced());
           this.announceBossIncoming(wavePlan.wave);
           hudDirty = true;
         },
@@ -870,7 +1197,15 @@ export class GameEngine {
             atk.enemyX,
             atk.enemyY
           );
-          if (dmgRes.effectiveDamage > 0) {
+          if (dmgRes.absorbedByShield > 0 && dmgRes.effectiveDamage === 0) {
+            this.combat.spawnShieldPulseEffect(
+              tankState.position.x,
+              tankState.position.y,
+              46
+            );
+            soundEffects.playClick(640);
+            hudDirty = true;
+          } else if (dmgRes.effectiveDamage > 0) {
             this.combat.spawnEnemyAttackTracer(
               atk.enemyX,
               atk.enemyY,
@@ -883,7 +1218,7 @@ export class GameEngine {
             this.playerDamageFlashTimer = atk.isBoss ? 0.24 : 0.17;
             this.renderer
               .getCamera()
-              .addKick(atk.isBoss ? 2.2 : 1.2, this.reducedMotion);
+              .addKick(atk.isBoss ? 2.2 : 1.2, this.isEffectsMotionReduced());
             soundEffects.playHit();
             hudDirty = true;
           }
@@ -921,13 +1256,13 @@ export class GameEngine {
             strike.radius,
             effectiveDamage
           );
-          this.renderer.getCamera().addKick(2.8, this.reducedMotion);
+          this.renderer.getCamera().addKick(2.8, this.isEffectsMotionReduced());
           soundEffects.playExplosion();
           hudDirty = true;
         },
         onEnemyDestroyed: (evt) => {
           if (evt.isBoss) {
-            this.renderer.getCamera().addKick(3.2, this.reducedMotion);
+            this.renderer.getCamera().addKick(3.2, this.isEffectsMotionReduced());
           }
         },
       }
@@ -954,7 +1289,7 @@ export class GameEngine {
       );
       this.renderer
         .getCamera()
-        .addKick(fireOut.isCrit ? 1.3 : 0.65, this.reducedMotion);
+        .addKick(fireOut.isCrit ? 1.3 : 0.65, this.isEffectsMotionReduced());
       soundEffects.playCannonFire();
     }
 
@@ -969,8 +1304,12 @@ export class GameEngine {
       enemySystem: this.enemies,
       combat: this.combat,
       result: skillStepResult,
+      transientDamageMultiplier: this.monetization.getAttackPowerMultiplier(),
       getCollectionBonuses: (skillId) =>
         this.skillCollection.getComputedBonuses(skillId),
+      grantShield: (amount, duration) => this.tank.addShield(amount, duration),
+      activateOverdrive: (bonus, duration) =>
+        this.tank.activateOverdrive(bonus, duration),
     });
 
     const combatResult = this.combat.update(
@@ -997,7 +1336,7 @@ export class GameEngine {
             dmgRes.effectiveDamage
           );
           this.playerDamageFlashTimer = 0.22;
-          this.renderer.getCamera().addKick(1.8, this.reducedMotion);
+          this.renderer.getCamera().addKick(1.8, this.isEffectsMotionReduced());
           soundEffects.playExplosion();
           hudDirty = true;
         }
@@ -1017,8 +1356,10 @@ export class GameEngine {
     const totalHits = combatResult.enemyHits + skillStepResult.enemyHits;
     const totalDestroyed =
       combatResult.enemiesDestroyed + skillStepResult.enemiesDestroyed;
+    const rawGold = combatResult.goldEarned + skillStepResult.goldEarned;
+    const coinMultiplier = this.monetization.getCoinGainMultiplier();
     const totalGold =
-      combatResult.goldEarned + skillStepResult.goldEarned;
+      rawGold > 0 ? Math.max(1, Math.round(rawGold * coinMultiplier)) : 0;
 
     if (totalHits > 0) {
       soundEffects.playHit();
@@ -1045,15 +1386,22 @@ export class GameEngine {
     // 3. Evaluate wave completion & automatic next-wave transitions
     const waveStep = this.waves.update(dt, this.enemies.countAliveEnemies());
     if (waveStep.completedEvent) {
-      if (waveStep.completedEvent.rewardGold > 0) {
-        this.currencies.add('gold', waveStep.completedEvent.rewardGold);
+      const scaledWaveReward =
+        waveStep.completedEvent.rewardGold > 0
+          ? Math.max(
+              1,
+              Math.round(waveStep.completedEvent.rewardGold * coinMultiplier)
+            )
+          : 0;
+      if (scaledWaveReward > 0) {
+        this.currencies.add('gold', scaledWaveReward);
       }
       this.lastWaveEvent = {
         id: ++this.waveEventCounter,
         kind: 'wave_clear',
         wave: waveStep.completedEvent.wave,
         isBossWave: waveStep.completedEvent.isBossWave,
-        rewardGold: waveStep.completedEvent.rewardGold,
+        rewardGold: scaledWaveReward,
         bossName: waveStep.completedEvent.isBossWave ? BOSS_CONFIG.name : undefined,
       };
       soundEffects.playWaveClear();
@@ -1078,10 +1426,12 @@ export class GameEngine {
       }
     }
 
-    // Throttle HUD cooldown ring sync (faster while forging progress bar animates)
+    // Throttle HUD cooldown ring sync (faster while Forge modal progress bar is visible)
     this.hudSyncAccumulator += dt;
     const syncInterval =
-      this.forge.getState().status === 'forging' ? 0.045 : 0.1;
+      this.forgePanelOpen && this.forge.getState().status === 'forging'
+        ? 0.05
+        : 0.1;
     if (this.hudSyncAccumulator >= syncInterval) {
       this.hudSyncAccumulator = 0;
       hudDirty = true;
@@ -1107,12 +1457,16 @@ export class GameEngine {
         enemies: this.enemies.getActiveEnemies(),
         projectiles: this.combat.getProjectiles(),
         mines: this.combat.getMines(),
+        turrets: this.combat.getTurrets(),
+        drones: this.combat.getDrones(),
+        delayedStrikes: this.combat.getDelayedStrikes(),
         effects: this.combat.getEffects(),
         showRangeRing: this.showRangeRing,
         isActive: this.phase === 'ACTIVE',
-        reducedMotion: this.reducedMotion,
+        reducedMotion: this.isEffectsMotionReduced(),
+        graphicsQuality: this.graphicsQuality,
         damageVignetteAlpha:
-          this.reducedMotion || this.playerDamageFlashTimer <= 0
+          this.isEffectsMotionReduced() || this.playerDamageFlashTimer <= 0
             ? 0
             : Math.min(0.24, (this.playerDamageFlashTimer / 0.24) * 0.22),
       });

@@ -21,6 +21,7 @@ import {
 } from '../types';
 
 const VALID_RARITY_SET = new Set<EquipmentRarity>(EQUIPMENT_RARITY_ORDER);
+const MAX_SAFE_FILTER_NUMBER = 1_000_000_000;
 
 const STOP_REASON_MESSAGES: Record<Exclude<AutoForgeStopReason, null>, string> = {
   manual: 'Auto Forge turned off',
@@ -78,7 +79,7 @@ export function cloneAutoForgeSettings(
       enabled: Boolean(src?.enabled),
       minValue:
         typeof src?.minValue === 'number' && Number.isFinite(src.minValue)
-          ? Math.max(0, src.minValue)
+          ? Math.min(MAX_SAFE_FILTER_NUMBER, Math.max(0, src.minValue))
           : statFilters[key].minValue,
     };
   }
@@ -94,14 +95,20 @@ export function cloneAutoForgeSettings(
     statFilters,
     requireSpecialEffect: Boolean(settings.requireSpecialEffect),
     spendingLimitEnabled: Boolean(settings.spendingLimitEnabled),
-    maxCoinSpend: Math.max(0, Math.floor(settings.maxCoinSpend)),
-    minCoinReserve: Math.max(0, Math.floor(settings.minCoinReserve)),
+    maxCoinSpend: Math.min(
+      MAX_SAFE_FILTER_NUMBER,
+      Math.max(0, Math.floor(settings.maxCoinSpend))
+    ),
+    minCoinReserve: Math.min(
+      MAX_SAFE_FILTER_NUMBER,
+      Math.max(0, Math.floor(settings.minCoinReserve))
+    ),
     autoResumeOnLoad: Boolean(settings.autoResumeOnLoad),
   };
 }
 
 function roundFilterValue(key: EquipmentStatKey, raw: number): number {
-  const clamped = Math.max(0, raw);
+  const clamped = Math.min(MAX_SAFE_FILTER_NUMBER, Math.max(0, raw));
   if (key === 'attackSpeed' || key === 'critDamage') {
     return Math.round(clamped * 100) / 100;
   }
@@ -137,7 +144,8 @@ export class AutoForgeSystem {
   private stopReason: AutoForgeStopReason = null;
   private lastEvent: AutoForgeEvent | null = null;
   private eventCounter = 0;
-  private countedItemUids = new Set<string>();
+  private countedSessionUids = new Set<string>();
+  private countedLifetimeUids = new Set<string>();
 
   static sanitizeSettings(raw: unknown): AutoForgeSettings {
     const defaults = createDefaultAutoForgeSettings();
@@ -185,14 +193,14 @@ export class AutoForgeSystem {
       typeof input.maxCoinSpend === 'number' &&
       Number.isFinite(input.maxCoinSpend) &&
       input.maxCoinSpend >= 0
-        ? Math.floor(input.maxCoinSpend)
+        ? Math.min(MAX_SAFE_FILTER_NUMBER, Math.floor(input.maxCoinSpend))
         : defaults.maxCoinSpend;
 
     const minCoinReserve =
       typeof input.minCoinReserve === 'number' &&
       Number.isFinite(input.minCoinReserve) &&
       input.minCoinReserve >= 0
-        ? Math.floor(input.minCoinReserve)
+        ? Math.min(MAX_SAFE_FILTER_NUMBER, Math.floor(input.minCoinReserve))
         : defaults.minCoinReserve;
 
     return {
@@ -260,7 +268,7 @@ export class AutoForgeSystem {
     this.savedEnabledPreference = true;
     this.pendingAutoResume = false;
     this.stopReason = null;
-    this.countedItemUids.clear();
+    this.countedSessionUids.clear();
     this.session = {
       coinsSpent: 0,
       itemsForged: 0,
@@ -272,7 +280,8 @@ export class AutoForgeSystem {
 
   stop(
     reason: Exclude<AutoForgeStopReason, null>,
-    customMessage?: string
+    customMessage?: string,
+    precedingItemEvent?: AutoForgeEvent | null
   ): void {
     const wasEnabled = this.enabled;
     this.enabled = false;
@@ -281,12 +290,19 @@ export class AutoForgeSystem {
     this.stopReason = reason;
 
     if (reason !== 'manual' || wasEnabled) {
-      const message = customMessage ?? STOP_REASON_MESSAGES[reason];
+      const stopMsg = customMessage ?? STOP_REASON_MESSAGES[reason];
+      const combinedMessage = precedingItemEvent
+        ? `${precedingItemEvent.message} · ${stopMsg}`
+        : stopMsg;
       this.lastEvent = {
         id: ++this.eventCounter,
         kind: 'stopped',
         stopReason: reason,
-        message,
+        itemName: precedingItemEvent?.itemName,
+        itemRarity: precedingItemEvent?.itemRarity,
+        itemSlot: precedingItemEvent?.itemSlot,
+        dismantleCoins: precedingItemEvent?.dismantleCoins,
+        message: combinedMessage,
       };
     }
   }
@@ -329,14 +345,23 @@ export class AutoForgeSystem {
   }
 
   recordItemForgedIfNeeded(itemUid: string): void {
-    if (this.countedItemUids.has(itemUid)) return;
-    this.countedItemUids.add(itemUid);
-    if (this.countedItemUids.size > 40) {
-      const oldest = this.countedItemUids.values().next().value;
-      if (oldest) this.countedItemUids.delete(oldest);
+    if (!this.countedSessionUids.has(itemUid)) {
+      this.countedSessionUids.add(itemUid);
+      if (this.countedSessionUids.size > 60) {
+        const oldest = this.countedSessionUids.values().next().value;
+        if (oldest) this.countedSessionUids.delete(oldest);
+      }
+      this.session.itemsForged += 1;
     }
-    this.session.itemsForged += 1;
-    this.lifetime.itemsForged += 1;
+
+    if (!this.countedLifetimeUids.has(itemUid)) {
+      this.countedLifetimeUids.add(itemUid);
+      if (this.countedLifetimeUids.size > 100) {
+        const oldest = this.countedLifetimeUids.values().next().value;
+        if (oldest) this.countedLifetimeUids.delete(oldest);
+      }
+      this.lifetime.itemsForged += 1;
+    }
   }
 
   evaluateItem(item: EquipmentItem): AutoForgeEvaluationResult {
@@ -366,11 +391,11 @@ export class AutoForgeSystem {
     return { keep: true };
   }
 
-  recordKept(item: EquipmentItem): void {
+  recordKept(item: EquipmentItem): AutoForgeEvent {
     this.session.itemsKept += 1;
     this.lifetime.itemsKept += 1;
     const rarityLabel = EQUIPMENT_RARITY_CONFIG[item.rarity].label;
-    this.lastEvent = {
+    const evt: AutoForgeEvent = {
       id: ++this.eventCounter,
       kind: 'kept',
       itemName: item.name,
@@ -378,13 +403,15 @@ export class AutoForgeSystem {
       itemSlot: item.slot,
       message: `Auto Forge Kept: ${item.name} (${rarityLabel})`,
     };
+    this.lastEvent = evt;
+    return evt;
   }
 
-  recordDismantled(item: EquipmentItem, coinsAwarded: number): void {
+  recordDismantled(item: EquipmentItem, coinsAwarded: number): AutoForgeEvent {
     this.session.itemsDismantled += 1;
     this.session.dismantleCoinsEarned += Math.max(0, Math.floor(coinsAwarded));
     this.lifetime.itemsDismantled += 1;
-    this.lastEvent = {
+    const evt: AutoForgeEvent = {
       id: ++this.eventCounter,
       kind: 'dismantled',
       itemName: item.name,
@@ -393,6 +420,8 @@ export class AutoForgeSystem {
       dismantleCoins: coinsAwarded,
       message: `Auto Dismantled: ${item.name} (+${coinsAwarded} Coins)`,
     };
+    this.lastEvent = evt;
+    return evt;
   }
 
   exportState(): SavedAutoForgeState {
@@ -409,7 +438,8 @@ export class AutoForgeSystem {
     this.pendingAutoResume = false;
     this.stopReason = null;
     this.lastEvent = null;
-    this.countedItemUids.clear();
+    this.countedSessionUids.clear();
+    this.countedLifetimeUids.clear();
     this.session = {
       coinsSpent: 0,
       itemsForged: 0,

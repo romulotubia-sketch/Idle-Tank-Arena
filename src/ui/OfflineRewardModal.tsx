@@ -1,20 +1,25 @@
-import { Clock, Coins } from 'lucide-react';
+import { Clock, Coins, Sparkles } from 'lucide-react';
 import { OfflineProgressSystem } from '../game/systems/OfflineProgressSystem';
-import { OfflineRewardSummary } from '../game/types';
+import { OfflineBonusPreview, OfflineRewardSummary } from '../game/types';
 
 interface OfflineRewardModalProps {
   reward: OfflineRewardSummary;
+  offlineBonusPreview?: OfflineBonusPreview | null;
   onClaim: () => void;
 }
 
 export function OfflineRewardModal({
   reward,
+  offlineBonusPreview,
   onClaim,
 }: OfflineRewardModalProps) {
   const durationLabel = OfflineProgressSystem.formatDuration(
     reward.effectiveSeconds
   );
   const maxHours = Math.round(reward.maxDurationSeconds / 3600);
+  const showPreparedBonus =
+    Boolean(offlineBonusPreview?.enabled) &&
+    (offlineBonusPreview?.bonusCoins ?? 0) > 0;
 
   return (
     <div
@@ -76,6 +81,27 @@ export function OfflineRewardModal({
             <span aria-hidden="true">·</span>
             <span>Coins only</span>
           </div>
+
+          {showPreparedBonus && offlineBonusPreview && (
+            <div className="rounded-lg bg-[#0E141B] border border-[#2A3646] px-3 py-2 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-200">
+                  <Sparkles className="w-3 h-3 text-sky-400 shrink-0" />
+                  <span>
+                    Optional Playgama Bonus (+{offlineBonusPreview.bonusPct}%)
+                  </span>
+                </div>
+                <div className="font-mono-tabular text-[11px] text-slate-400">
+                  +{offlineBonusPreview.bonusCoins.toLocaleString()} extra Coins
+                </div>
+              </div>
+              <span className="px-1.5 py-0.5 rounded bg-[#161E28] border border-[#334155] text-[10px] font-semibold text-slate-400 whitespace-nowrap shrink-0">
+                {offlineBonusPreview.sdkConnected
+                  ? `${offlineBonusPreview.dailyRemaining}/${offlineBonusPreview.dailyLimit} left`
+                  : 'Coming Soon'}
+              </span>
+            </div>
+          )}
 
           <button
             type="button"

@@ -26,7 +26,7 @@ export interface UpgradePurchaseResult {
 
 export class UpgradeSystem {
   private levels = new Map<UpgradeId, number>();
-  private lastPurchaseTimestampMs = 0;
+  private lastPurchaseTimestampMs = -10000;
   private readonly minPurchaseIntervalMs = 180;
 
   constructor() {

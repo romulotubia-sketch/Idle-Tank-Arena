@@ -7,15 +7,18 @@ import { GameEngine } from '../game/engine/GameEngine';
 import { skillRegistry } from '../game/systems/skills/SkillRegistry';
 import {
   AutoForgeSettings,
+  AutoUpgradeSettings,
   EquipmentPreferences,
   EquipmentSlotType,
   GameHudSnapshot,
+  GraphicsQuality,
   SkillId,
   UpgradeId,
   WaveHudEvent,
 } from '../game/types';
 import { playgamaBridge } from '../platform/playgamaBridge';
 import { AutoForgeSettingsModal } from './AutoForgeSettingsModal';
+import { AutoUpgradeSettingsModal } from './AutoUpgradeSettingsModal';
 import { BattlefieldCanvas } from './BattlefieldCanvas';
 import {
   ActionBannerInfo,
@@ -28,8 +31,10 @@ import { DefeatOverlay } from './DefeatOverlay';
 import { EquipmentFeedbackInfo, EquipmentModal } from './EquipmentModal';
 import { ForgeFeedbackInfo, ForgeModal } from './ForgeModal';
 import { OfflineRewardModal } from './OfflineRewardModal';
-import { PauseModal } from './PauseModal';
+import { PauseModal, PauseModalMode } from './PauseModal';
+import { PendingSkillsModal } from './PendingSkillsModal';
 import {
+  getSkillRarityStyles,
   SkillCollectionFeedbackInfo,
   SkillCollectionModal,
 } from './SkillCollectionModal';
@@ -54,18 +59,22 @@ export function GameShell() {
   const [snapshot, setSnapshot] = useState<GameHudSnapshot>(() =>
     engine.getSnapshot()
   );
-  const [soundEnabled, setSoundEnabled] = useState<boolean>(() =>
-    engine.isSoundEnabled()
-  );
+  const [pauseModalMode, setPauseModalMode] = useState<PauseModalMode>('pause');
   const [floatingToast, setFloatingToast] = useState<FloatingToast | null>(null);
-  const [selectedSlotIndex, setSelectedSlotIndex] = useState<number | null>(null);
   const [highlightedSlotIndex, setHighlightedSlotIndex] = useState<number | null>(
     null
   );
-  const [invalidSlotIndex, setInvalidSlotIndex] = useState<number | null>(null);
+  const [upgradedSlotIndex, setUpgradedSlotIndex] = useState<number | null>(
+    null
+  );
   const [activePanel, setActivePanel] = useState<ActivePanelId>(null);
   const [autoForgeSettingsOpen, setAutoForgeSettingsOpen] =
     useState<boolean>(false);
+  const [skillModal, setSkillModal] = useState<
+    'pending' | 'auto_upgrade_settings' | null
+  >(null);
+  const [focusedPendingSkillId, setFocusedPendingSkillId] =
+    useState<SkillId | null>(null);
   const [upgradeFeedback, setUpgradeFeedback] =
     useState<UpgradeFeedbackInfo | null>(null);
   const [equipmentFeedback, setEquipmentFeedback] =
@@ -82,7 +91,7 @@ export function GameShell() {
   const toastTimerRef = useRef<number | null>(null);
   const toastCounterRef = useRef<number>(0);
   const highlightTimerRef = useRef<number | null>(null);
-  const invalidTimerRef = useRef<number | null>(null);
+  const upgradeSlotTimerRef = useRef<number | null>(null);
   const upgradeFeedbackTimerRef = useRef<number | null>(null);
   const equipmentFeedbackTimerRef = useRef<number | null>(null);
   const forgeFeedbackTimerRef = useRef<number | null>(null);
@@ -93,6 +102,7 @@ export function GameShell() {
   const lastSeenAutoForgeEventIdRef = useRef<number>(0);
   const activePanelRef = useRef<ActivePanelId>(null);
   const autoForgeSettingsOpenRef = useRef<boolean>(false);
+  const skillModalRef = useRef<'pending' | 'auto_upgrade_settings' | null>(null);
 
   useEffect(() => {
     activePanelRef.current = activePanel;
@@ -101,6 +111,18 @@ export function GameShell() {
   useEffect(() => {
     autoForgeSettingsOpenRef.current = autoForgeSettingsOpen;
   }, [autoForgeSettingsOpen]);
+
+  useEffect(() => {
+    skillModalRef.current = skillModal;
+  }, [skillModal]);
+
+  useEffect(() => {
+    engine.setForgePanelOpen(
+      snapshot.phase === 'ACTIVE' &&
+        activePanel === 'forge' &&
+        !autoForgeSettingsOpen
+    );
+  }, [engine, snapshot.phase, activePanel, autoForgeSettingsOpen]);
 
   const showToast = useCallback(
     (toast: FloatingToastPayload, durationMs = 1850) => {
@@ -183,42 +205,32 @@ export function GameShell() {
     []
   );
 
-  const closeActivePanel = useCallback(
-    (options?: { blockOnFullForge?: boolean }): boolean => {
-      const current = activePanelRef.current;
-      if (!current) return true;
+  const closeActivePanel = useCallback((): boolean => {
+    const current = activePanelRef.current;
+    if (!current) return true;
 
-      if (current === 'forge') {
-        const kept = engine.keepForgedItemInInventory();
-        if (kept.reason === 'inventory_full') {
-          if (options?.blockOnFullForge) {
-            soundEffects.playInvalid();
-            showForgeFeedback(
-              'Inventory is full! Dismantle this item or open Equipment to free 1 slot.',
-              'error'
-            );
-            return false;
-          }
-          showNotice(
-            'Pending forged item kept safely in Forge (inventory full)',
-            'error'
-          );
-        } else if (kept.success && kept.item) {
-          showNotice(`${kept.item.name} added to Equipment Inventory`);
-        }
+    if (current === 'forge') {
+      const kept = engine.keepForgedItemInInventory();
+      if (kept.reason === 'inventory_full') {
+        showNotice(
+          'Pending forged item kept safely in Forge (inventory full)',
+          'error'
+        );
+      } else if (kept.success && kept.item) {
+        showNotice(`${kept.item.name} added to Equipment Inventory`);
       }
+    }
 
-      setAutoForgeSettingsOpen(false);
-      setActivePanel(null);
-      return true;
-    },
-    [engine, showForgeFeedback, showNotice]
-  );
+    setAutoForgeSettingsOpen(false);
+    setSkillModal(null);
+    setActivePanel(null);
+    return true;
+  }, [engine, showNotice]);
 
   const openPanel = useCallback(
     (target: Exclude<ActivePanelId, null | 'settings'>) => {
       const current = activePanelRef.current;
-      if (current === target) return;
+      if (current === target && skillModalRef.current === null) return;
 
       if (current === 'forge') {
         const kept = engine.keepForgedItemInInventory();
@@ -242,10 +254,24 @@ export function GameShell() {
         }
       }
 
+      setSkillModal(null);
       setAutoForgeSettingsOpen(false);
       setActivePanel(target);
     },
     [engine, showEquipmentFeedback, showNotice]
+  );
+
+  const openSkillModal = useCallback(
+    (mode: 'pending' | 'auto_upgrade_settings', focusSkillId: SkillId | null = null) => {
+      if (activePanelRef.current === 'forge') {
+        engine.keepForgedItemInInventory();
+      }
+      setAutoForgeSettingsOpen(false);
+      setActivePanel(null);
+      setFocusedPendingSkillId(focusSkillId);
+      setSkillModal(mode);
+    },
+    [engine]
   );
 
   const togglePanel = useCallback(
@@ -253,7 +279,7 @@ export function GameShell() {
       const isCurrentlyOpen = activePanelRef.current === target;
       soundEffects.playClick(isCurrentlyOpen ? 400 : 540);
       if (isCurrentlyOpen) {
-        closeActivePanel({ blockOnFullForge: target === 'forge' });
+        closeActivePanel();
         return;
       }
       openPanel(target);
@@ -263,15 +289,12 @@ export function GameShell() {
 
   useEffect(() => {
     const unsubscribe = engine.subscribe(setSnapshot);
-    void engine.initialize().then(() => {
-      const enabled = engine.isSoundEnabled();
-      setSoundEnabled(enabled);
-      soundEffects.setEnabled(enabled);
-    });
+    void engine.initialize();
 
     const unsubVis = playgamaBridge.onVisibilityChange((isHidden) => {
       if (isHidden) {
         if (engine.getSnapshot().phase === 'ACTIVE') {
+          setPauseModalMode('pause');
           engine.setPhase('PAUSED');
         } else {
           void engine.persist();
@@ -289,13 +312,14 @@ export function GameShell() {
       if (event.key === 'Escape') {
         const currentPhase = engine.getSnapshot().phase;
         if (currentPhase === 'ACTIVE') {
-          if (autoForgeSettingsOpenRef.current) {
+          if (skillModalRef.current) {
+            setSkillModal(null);
+          } else if (autoForgeSettingsOpenRef.current) {
             setAutoForgeSettingsOpen(false);
           } else if (activePanelRef.current) {
-            closeActivePanel({
-              blockOnFullForge: activePanelRef.current === 'forge',
-            });
+            closeActivePanel();
           } else {
+            setPauseModalMode('pause');
             engine.setPhase('PAUSED');
           }
         } else if (currentPhase === 'PAUSED') {
@@ -313,7 +337,7 @@ export function GameShell() {
       window.removeEventListener('keydown', onKeyDown);
       if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
       if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
-      if (invalidTimerRef.current !== null) window.clearTimeout(invalidTimerRef.current);
+      if (upgradeSlotTimerRef.current !== null) window.clearTimeout(upgradeSlotTimerRef.current);
       if (upgradeFeedbackTimerRef.current !== null) window.clearTimeout(upgradeFeedbackTimerRef.current);
       if (equipmentFeedbackTimerRef.current !== null) window.clearTimeout(equipmentFeedbackTimerRef.current);
       if (forgeFeedbackTimerRef.current !== null) window.clearTimeout(forgeFeedbackTimerRef.current);
@@ -364,11 +388,10 @@ export function GameShell() {
     showNotice,
   ]);
 
-  // Clear merge selection and close panels when leaving ACTIVE gameplay
+  // Close modals and panels when leaving ACTIVE gameplay
   useEffect(() => {
     if (snapshot.phase !== 'ACTIVE') {
-      setSelectedSlotIndex(null);
-      setInvalidSlotIndex(null);
+      setSkillModal(null);
       setAutoForgeSettingsOpen(false);
       setActivePanel(null);
       setUpgradeFeedback(null);
@@ -388,22 +411,22 @@ export function GameShell() {
     }, 850);
   };
 
-  const triggerInvalidFlash = (slotIndex: number) => {
-    setInvalidSlotIndex(slotIndex);
-    if (invalidTimerRef.current !== null) {
-      window.clearTimeout(invalidTimerRef.current);
+  const triggerUpgradeHighlight = (slotIndex: number) => {
+    setUpgradedSlotIndex(slotIndex);
+    if (upgradeSlotTimerRef.current !== null) {
+      window.clearTimeout(upgradeSlotTimerRef.current);
     }
-    invalidTimerRef.current = window.setTimeout(() => {
-      setInvalidSlotIndex(null);
-    }, 420);
+    upgradeSlotTimerRef.current = window.setTimeout(() => {
+      setUpgradedSlotIndex(null);
+    }, 950);
   };
 
   const handleStartGame = () => {
     soundEffects.playDeploy();
     setFloatingToast(null);
-    setSelectedSlotIndex(null);
     setHighlightedSlotIndex(null);
-    setInvalidSlotIndex(null);
+    setUpgradedSlotIndex(null);
+    setSkillModal(null);
     engine.startFromTitle();
   };
 
@@ -415,13 +438,37 @@ export function GameShell() {
     }
   };
 
+  const handleTogglePause = () => {
+    const currentPhase = engine.getSnapshot().phase;
+    if (currentPhase === 'PAUSED') {
+      soundEffects.playClick(560);
+      engine.setPhase('ACTIVE');
+      return;
+    }
+    if (currentPhase !== 'ACTIVE') return;
+    soundEffects.playClick(420);
+    if (activePanel === 'forge') {
+      engine.keepForgedItemInInventory();
+    }
+    setSkillModal(null);
+    setAutoForgeSettingsOpen(false);
+    setActivePanel(null);
+    setPauseModalMode('pause');
+    engine.setPhase('PAUSED');
+  };
+
   const handleOpenSettings = () => {
     soundEffects.playClick(420);
     if (activePanel === 'forge') {
       engine.keepForgedItemInInventory();
     }
+    setSkillModal(null);
+    setAutoForgeSettingsOpen(false);
     setActivePanel(null);
-    engine.setPhase('PAUSED');
+    setPauseModalMode('settings');
+    if (engine.getSnapshot().phase !== 'PAUSED') {
+      engine.setPhase('PAUSED');
+    }
   };
 
   const handleResume = () => {
@@ -432,20 +479,37 @@ export function GameShell() {
   const handleReturnToTitle = () => {
     soundEffects.playClick(380);
     setFloatingToast(null);
-    setSelectedSlotIndex(null);
     setHighlightedSlotIndex(null);
-    setInvalidSlotIndex(null);
+    setUpgradedSlotIndex(null);
+    setSkillModal(null);
     engine.returnToTitle();
   };
 
   const handleToggleSound = () => {
-    const next = !soundEnabled;
-    setSoundEnabled(next);
-    soundEffects.setEnabled(next);
+    const next = !snapshot.settings.soundEnabled;
     engine.setSoundEnabled(next);
     if (next) {
       soundEffects.playClick(600);
     }
+  };
+
+  const handleChangeSoundVolume = (volume: number) => {
+    engine.setSoundVolume(volume);
+  };
+
+  const handleToggleMusic = () => {
+    const next = !snapshot.settings.musicEnabled;
+    soundEffects.playClick(next ? 580 : 400);
+    engine.setMusicEnabled(next);
+  };
+
+  const handleChangeMusicVolume = (volume: number) => {
+    engine.setMusicVolume(volume);
+  };
+
+  const handleChangeGraphicsQuality = (quality: GraphicsQuality) => {
+    soundEffects.playClick(520);
+    engine.setGraphicsQuality(quality);
   };
 
   const handleToggleRangeRing = () => {
@@ -454,26 +518,90 @@ export function GameShell() {
   };
 
   const handleSummonClick = () => {
-    setSelectedSlotIndex(null);
     const res = engine.summonSkill();
-    if (!res.success || res.skillId === undefined || res.slotIndex === undefined) {
+    if (!res.success || res.skillId === undefined) {
       if (res.reason === 'insufficient_currency') {
         soundEffects.playClick(280);
         showNotice(`Need ${snapshot.summonCost} Coins to summon`, 'error');
-      } else if (res.reason === 'slots_full') {
-        soundEffects.playClick(280);
-        showNotice('All 6 skill slots are occupied', 'error');
       }
       return;
     }
 
-    soundEffects.playSummon();
     const def = skillRegistry.getDefinition(res.skillId);
-    triggerHighlight(res.slotIndex);
+    const skillName = def?.name ?? res.skillId;
+
+    if (res.outcome === 'upgraded' && res.slotIndex !== undefined) {
+      const nextLv = res.level ?? 2;
+      soundEffects.playSkillUpgrade(nextLv);
+      triggerUpgradeHighlight(res.slotIndex);
+      showBanner({
+        kind: 'upgrade',
+        skillId: res.skillId,
+        name: skillName,
+        rarity: def?.rarity,
+        level: nextLv,
+        previousLevel: res.previousLevel,
+        accentColor: def?.accentColor ?? '#34D399',
+        fragmentsAwarded: res.fragmentsAwarded,
+      });
+      return;
+    }
+
+    if (res.outcome === 'pending_choice') {
+      soundEffects.playSummon();
+      openSkillModal('pending', res.skillId);
+      showBanner({
+        kind: 'summon',
+        skillId: res.skillId,
+        name: skillName,
+        rarity: def?.rarity,
+        level: 1,
+        accentColor: def?.accentColor ?? '#38BDF8',
+        unlockedNew: res.unlockedNew,
+        fragmentsAwarded: res.fragmentsAwarded,
+      });
+      return;
+    }
+
+    if (
+      res.outcome === 'overflow_fragments' ||
+      res.outcome === 'overflow_coins' ||
+      res.outcome === 'stored_pending'
+    ) {
+      soundEffects.playUpgrade();
+      if (res.slotIndex !== undefined) {
+        triggerHighlight(res.slotIndex);
+      }
+      showBanner({
+        kind: 'overflow',
+        skillId: res.skillId,
+        name: skillName,
+        rarity: def?.rarity,
+        level: res.level ?? MAX_SKILL_LEVEL,
+        accentColor: def?.accentColor ?? '#F59E0B',
+        overflowFragments: res.overflowFragments,
+        overflowCoins: res.overflowCoins,
+        fragmentsAwarded: res.fragmentsAwarded,
+      });
+      return;
+    }
+
+    // Default: equipped into vacant slot
+    soundEffects.playSummon();
+    if (res.slotIndex !== undefined) {
+      if (res.autoUpgrades && res.autoUpgrades.length > 0) {
+        const lastAuto = res.autoUpgrades[res.autoUpgrades.length - 1];
+        soundEffects.playSkillUpgrade(lastAuto.newLevel);
+        triggerUpgradeHighlight(res.slotIndex);
+      } else {
+        triggerHighlight(res.slotIndex);
+      }
+    }
     showBanner({
       kind: 'summon',
       skillId: res.skillId,
-      name: def?.name ?? res.skillId,
+      name: skillName,
+      rarity: def?.rarity,
       level: res.level ?? 1,
       accentColor: def?.accentColor ?? '#F59E0B',
       unlockedNew: res.unlockedNew,
@@ -487,122 +615,138 @@ export function GameShell() {
     const tappedSlot = snapshot.skillSlots[slotIndex];
     if (!tappedSlot) return;
 
-    if (selectedSlotIndex === null) {
-      if (!tappedSlot.skillId) {
-        soundEffects.playClick(360);
-        showNotice(`Slot ${slotIndex + 1} is vacant · Tap Summon to fill`);
-        return;
-      }
-
-      const def = skillRegistry.getDefinition(tappedSlot.skillId);
-      const skillName = def?.name ?? tappedSlot.skillId;
-
-      if (tappedSlot.level >= MAX_SKILL_LEVEL) {
-        soundEffects.playInvalid();
-        triggerInvalidFlash(slotIndex);
-        showNotice(`${skillName} Lv.${tappedSlot.level} is already at max level`, 'error');
-        return;
-      }
-
-      const hasMatch = snapshot.skillSlots.some(
-        (other) =>
-          other.index !== slotIndex &&
-          other.skillId === tappedSlot.skillId &&
-          other.level === tappedSlot.level
-      );
-
-      soundEffects.playClick(560);
-      setSelectedSlotIndex(slotIndex);
-      showNotice(
-        hasMatch
-          ? `Tap matching ${skillName} Lv.${tappedSlot.level} to merge`
-          : `Selected ${skillName} Lv.${tappedSlot.level} · Need another Lv.${tappedSlot.level}`
-      );
-      return;
-    }
-
-    if (selectedSlotIndex === slotIndex) {
-      soundEffects.playClick(420);
-      setSelectedSlotIndex(null);
-      showNotice('Selection cancelled');
-      return;
-    }
-
     if (!tappedSlot.skillId) {
       soundEffects.playClick(420);
-      setSelectedSlotIndex(null);
-      showNotice('Selection cancelled');
+      if (snapshot.pendingSkillCount > 0) {
+        openSkillModal('pending', snapshot.pendingSkills[0]?.skillId ?? null);
+      } else {
+        showNotice(`Slot ${slotIndex + 1} is vacant · Tap Summon to fill`);
+      }
       return;
     }
 
-    const firstSlot = snapshot.skillSlots[selectedSlotIndex];
-    const mergeRes = engine.mergeSkills(selectedSlotIndex, slotIndex);
+    const def = skillRegistry.getDefinition(tappedSlot.skillId);
+    const skillName = def?.name ?? tappedSlot.skillId;
+    const pendingForSlot = snapshot.pendingSkills.find(
+      (p) => p.skillId === tappedSlot.skillId
+    );
 
-    if (mergeRes.reason === 'cooldown_locked') {
+    soundEffects.playClick(520);
+    if (pendingForSlot && pendingForSlot.copies > 0) {
+      openSkillModal('pending', tappedSlot.skillId);
       return;
     }
 
-    setSelectedSlotIndex(null);
+    showNotice(
+      tappedSlot.level >= MAX_SKILL_LEVEL
+        ? `${skillName} · Max Lv.${MAX_SKILL_LEVEL}`
+        : `${skillName} · Lv.${tappedSlot.level} / ${MAX_SKILL_LEVEL} (duplicates upgrade automatically)`
+    );
+  };
 
-    if (
-      mergeRes.success &&
-      mergeRes.skillId &&
-      mergeRes.targetSlotIndex !== undefined &&
-      mergeRes.newLevel !== undefined
-    ) {
-      soundEffects.playMerge(mergeRes.newLevel);
-      const def = skillRegistry.getDefinition(mergeRes.skillId);
-      triggerHighlight(mergeRes.targetSlotIndex);
+  const handleEquipPendingToSlot = (slotIndex: number, skillId: SkillId) => {
+    const res = engine.equipPendingSkillToSlot(slotIndex, skillId);
+    if (!res.success) {
+      soundEffects.playInvalid();
+      return;
+    }
+    const def = skillRegistry.getDefinition(skillId);
+    const skillName = def?.name ?? skillId;
+    if (res.autoUpgrades && res.autoUpgrades.length > 0) {
+      const last = res.autoUpgrades[res.autoUpgrades.length - 1];
+      soundEffects.playSkillUpgrade(last.newLevel);
+      triggerUpgradeHighlight(slotIndex);
       showBanner({
-        kind: 'merge',
-        skillId: mergeRes.skillId,
-        name: def?.name ?? mergeRes.skillId,
-        level: mergeRes.newLevel,
-        previousLevel: mergeRes.previousLevel,
+        kind: 'upgrade',
+        skillId,
+        name: skillName,
+        previousLevel: 1,
+        level: last.newLevel,
+        accentColor: def?.accentColor ?? '#34D399',
+      });
+    } else {
+      soundEffects.playEquip();
+      triggerHighlight(slotIndex);
+      showNotice(`Equipped ${skillName} Lv.1 into Slot ${slotIndex + 1}`);
+    }
+    setSkillModal(null);
+  };
+
+  const handleApplyPendingUpgrade = (skillId: SkillId) => {
+    const res = engine.applyPendingSkillUpgrade(skillId);
+    if (
+      res.success &&
+      res.slotIndex !== undefined &&
+      res.newLevel !== undefined
+    ) {
+      const def = skillRegistry.getDefinition(skillId);
+      soundEffects.playSkillUpgrade(res.newLevel);
+      triggerUpgradeHighlight(res.slotIndex);
+      showBanner({
+        kind: 'upgrade',
+        skillId,
+        name: def?.name ?? skillId,
+        previousLevel: res.previousLevel,
+        level: res.newLevel,
         accentColor: def?.accentColor ?? '#34D399',
       });
       return;
     }
-
     soundEffects.playInvalid();
-    triggerInvalidFlash(slotIndex);
+  };
 
-    if (mergeRes.reason === 'skill_mismatch') {
-      const firstDef = firstSlot?.skillId
-        ? skillRegistry.getDefinition(firstSlot.skillId)
-        : undefined;
-      const secondDef = skillRegistry.getDefinition(tappedSlot.skillId);
-      showNotice(
-        `Cannot merge ${firstDef?.shortLabel ?? 'skill'} with ${secondDef?.shortLabel ?? 'different skill'}`,
-        'error'
-      );
-    } else if (mergeRes.reason === 'level_mismatch') {
-      showNotice(
-        `Level mismatch (Lv.${firstSlot?.level ?? '?'} + Lv.${tappedSlot.level}) · Must match`,
-        'error'
-      );
-    } else if (mergeRes.reason === 'max_level') {
-      showNotice('Max Level 5 skills cannot merge further', 'error');
-    } else {
-      showNotice('Select two identical skills of the same level', 'error');
+  const handleConvertPendingOverflow = (skillId: SkillId) => {
+    const res = engine.convertPendingOverflow(skillId);
+    if (res.convertedCopies > 0) {
+      soundEffects.playUpgrade();
+      showNotice(`Converted into +${res.fragmentsAwarded} Skill Fragments`);
     }
   };
 
-  const handleMergeAreaClick = () => {
-    if (selectedSlotIndex !== null) {
-      soundEffects.playClick(420);
-      setSelectedSlotIndex(null);
-      showNotice('Merge selection cancelled');
-      return;
+  const handleDiscardPendingSkill = (skillId: SkillId) => {
+    const removed = engine.discardPendingSkill(skillId);
+    if (removed > 0) {
+      soundEffects.playClick(380);
+      showNotice('Removed pending skill from queue');
     }
+  };
 
-    soundEffects.playClick(500);
-    const pairReady = engine.skillMerge.hasAvailableMerge(snapshot.skillSlots);
-    showNotice(
-      pairReady
-        ? 'Tap two glowing matching skills to merge!'
-        : 'Tap an occupied slot, then an identical match to merge'
-    );
+  const handleToggleAutoUpgrade = () => {
+    const res = engine.toggleAutoUpgrade();
+    if (res.enabled) {
+      soundEffects.playUpgrade();
+      if (res.upgrades.length > 0) {
+        const last = res.upgrades[res.upgrades.length - 1];
+        triggerUpgradeHighlight(last.slotIndex);
+        soundEffects.playSkillUpgrade(last.newLevel);
+        showNotice(
+          `Auto Upgrade ON · Upgraded ${res.upgrades.length} ${
+            res.upgrades.length === 1 ? 'skill' : 'skills'
+          }`
+        );
+      } else {
+        showNotice('Auto Upgrade enabled');
+      }
+    } else {
+      soundEffects.playClick(420);
+      showNotice('Auto Upgrade paused (direct summon duplicates still upgrade)');
+    }
+  };
+
+  const handleSaveAutoUpgradeSettings = (next: AutoUpgradeSettings) => {
+    const res = engine.updateAutoUpgradeSettings(next);
+    soundEffects.playUpgrade();
+    if (res.upgrades.length > 0) {
+      const last = res.upgrades[res.upgrades.length - 1];
+      triggerUpgradeHighlight(last.slotIndex);
+      soundEffects.playSkillUpgrade(last.newLevel);
+    }
+    showNotice('Auto Upgrade settings saved');
+  };
+
+  const handleResetAutoUpgradeSettings = () => {
+    soundEffects.playClick(440);
+    return engine.resetAutoUpgradeSettings();
   };
 
   const handleStartForge = () => {
@@ -638,12 +782,13 @@ export function GameShell() {
     const res = engine.toggleAutoForge();
     if (res.enabled) {
       soundEffects.playForgeStart();
-      showForgeFeedback('Auto Forge enabled', 'success');
+      if (!res.outcome?.processedItem) {
+        showForgeFeedback('Auto Forge enabled', 'success');
+      }
     } else if (res.outcome?.stoppedReason && res.outcome.stoppedReason !== 'manual') {
       soundEffects.playInvalid();
     } else {
       soundEffects.playClick(420);
-      showForgeFeedback('Auto Forge paused', 'success');
     }
   };
 
@@ -675,6 +820,25 @@ export function GameShell() {
     if (res.reason === 'inventory_full') {
       showForgeFeedback(
         'Inventory full — cannot return replaced gear to bag. Free 1 slot or Dismantle.',
+        'error'
+      );
+    }
+  };
+
+  const handleKeepForged = () => {
+    const res = engine.keepForgedItemInInventory();
+    if (res.success && res.item) {
+      soundEffects.playClick(560);
+      showForgeFeedback(
+        `Saved ${res.item.name} to Equipment Inventory`,
+        'success'
+      );
+      return;
+    }
+    soundEffects.playInvalid();
+    if (res.reason === 'inventory_full') {
+      showForgeFeedback(
+        'Inventory full — dismantle unused gear or this item first',
         'error'
       );
     }
@@ -858,9 +1022,6 @@ export function GameShell() {
     }
   };
 
-  const mergeablePairAvailable = engine.skillMerge.hasAvailableMerge(
-    snapshot.skillSlots
-  );
   const hasAffordableUpgrade = snapshot.upgrades.some(
     (entry) => !entry.isMaxed && snapshot.currencies.gold >= entry.nextCost
   );
@@ -876,14 +1037,19 @@ export function GameShell() {
   ).length;
 
   return (
-    <div className="relative flex flex-col w-screen h-dvh bg-[#12161B] text-[#F1F5F9] overflow-hidden">
+    <div
+      data-graphics={snapshot.settings.graphicsQuality}
+      className="relative flex flex-col w-screen h-dvh bg-[#12161B] text-[#F1F5F9] overflow-hidden"
+    >
       <TopHud
         phase={snapshot.phase}
         wave={snapshot.wave}
         boss={snapshot.boss}
         currencies={snapshot.currencies}
         totalSkillFragments={totalSkillFragments}
+        activeBoost={snapshot.monetization.activeBoost}
         onOpenCollection={() => togglePanel('collection')}
+        onTogglePause={handleTogglePause}
         onOpenSettings={handleOpenSettings}
       />
 
@@ -954,7 +1120,7 @@ export function GameShell() {
                 className="flex items-center gap-2 bg-[#12171E]/95 border rounded-lg px-3 py-1 shadow-xl whitespace-nowrap"
                 style={{
                   borderColor:
-                    floatingToast.banner.kind === 'merge'
+                    floatingToast.banner.kind === 'upgrade'
                       ? '#34D399'
                       : floatingToast.banner.accentColor,
                 }}
@@ -965,24 +1131,45 @@ export function GameShell() {
                   'w-3.5 h-3.5 shrink-0'
                 )}
                 <span className="text-xs font-bold text-white truncate">
-                  {floatingToast.banner.kind === 'merge'
-                    ? `Merged ${floatingToast.banner.name}`
-                    : `Summoned ${floatingToast.banner.name}`}
+                  {floatingToast.banner.kind === 'upgrade'
+                    ? `Upgraded ${floatingToast.banner.name}`
+                    : floatingToast.banner.kind === 'overflow'
+                      ? `${floatingToast.banner.name} Max`
+                      : `Summoned ${floatingToast.banner.name}`}
                 </span>
+                {floatingToast.banner.rarity && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded border text-[9px] font-bold leading-none shrink-0 ${
+                      getSkillRarityStyles(floatingToast.banner.rarity).badgeClass
+                    }`}
+                  >
+                    {getSkillRarityStyles(floatingToast.banner.rarity).label}
+                  </span>
+                )}
                 <span className="font-mono-tabular text-[11px] font-bold text-amber-300 shrink-0">
-                  {floatingToast.banner.kind === 'merge' &&
+                  {floatingToast.banner.kind === 'upgrade' &&
                   floatingToast.banner.previousLevel !== undefined
                     ? `Lv.${floatingToast.banner.previousLevel} → Lv.${floatingToast.banner.level}`
                     : `Lv.${floatingToast.banner.level}`}
                 </span>
-                {floatingToast.banner.kind === 'summon' &&
-                  floatingToast.banner.unlockedNew && (
-                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/60 text-[10px] font-bold text-emerald-300 leading-none">
-                      New
+                {floatingToast.banner.unlockedNew && (
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/60 text-[10px] font-bold text-emerald-300 leading-none">
+                    New
+                  </span>
+                )}
+                {floatingToast.banner.overflowFragments !== undefined &&
+                  floatingToast.banner.overflowFragments > 0 && (
+                    <span className="font-mono-tabular text-[11px] font-bold text-sky-300 shrink-0">
+                      +{floatingToast.banner.overflowFragments} Overflow Frags
                     </span>
                   )}
-                {floatingToast.banner.kind === 'summon' &&
-                  floatingToast.banner.fragmentsAwarded !== undefined &&
+                {floatingToast.banner.overflowCoins !== undefined &&
+                  floatingToast.banner.overflowCoins > 0 && (
+                    <span className="font-mono-tabular text-[11px] font-bold text-amber-300 shrink-0">
+                      +{floatingToast.banner.overflowCoins} Refund
+                    </span>
+                  )}
+                {floatingToast.banner.fragmentsAwarded !== undefined &&
                   floatingToast.banner.fragmentsAwarded > 0 && (
                     <span className="font-mono-tabular text-[11px] font-bold text-sky-300 shrink-0">
                       +{floatingToast.banner.fragmentsAwarded} Frags
@@ -1065,16 +1252,15 @@ export function GameShell() {
                 setAutoForgeSettingsOpen(true);
               }}
               onEquipForged={handleEquipForged}
+              onKeepForged={handleKeepForged}
               onDismantleForged={handleDismantleForged}
               onOpenEquipment={() => {
                 soundEffects.playClick(540);
                 openPanel('equipment');
               }}
               onClose={() => {
-                const closed = closeActivePanel({ blockOnFullForge: true });
-                if (closed) {
-                  soundEffects.playClick(400);
-                }
+                soundEffects.playClick(400);
+                closeActivePanel();
               }}
             />
           )}
@@ -1114,6 +1300,39 @@ export function GameShell() {
           />
         )}
 
+        {snapshot.phase === 'ACTIVE' && skillModal === 'pending' && (
+          <PendingSkillsModal
+            skillSlots={snapshot.skillSlots}
+            pendingSkills={snapshot.pendingSkills}
+            focusedSkillId={focusedPendingSkillId}
+            autoUpgradeEnabled={snapshot.autoUpgrade.enabled}
+            onEquipToSlot={handleEquipPendingToSlot}
+            onApplyUpgrade={handleApplyPendingUpgrade}
+            onConvertOverflow={handleConvertPendingOverflow}
+            onDiscardPending={handleDiscardPendingSkill}
+            onClose={() => {
+              soundEffects.playClick(400);
+              setSkillModal(null);
+            }}
+          />
+        )}
+
+        {snapshot.phase === 'ACTIVE' &&
+          skillModal === 'auto_upgrade_settings' && (
+            <AutoUpgradeSettingsModal
+              enabled={snapshot.autoUpgrade.enabled}
+              totalAutoUpgrades={snapshot.autoUpgrade.totalAutoUpgrades}
+              settings={snapshot.autoUpgrade.settings}
+              onToggleEnabled={handleToggleAutoUpgrade}
+              onSaveSettings={handleSaveAutoUpgradeSettings}
+              onResetSettings={handleResetAutoUpgradeSettings}
+              onClose={() => {
+                soundEffects.playClick(400);
+                setSkillModal(null);
+              }}
+            />
+          )}
+
         {snapshot.phase === 'TITLE' && (
           <TitleOverlay
             highestWave={snapshot.wave.highestWave}
@@ -1124,6 +1343,7 @@ export function GameShell() {
         {snapshot.offlineReward && !snapshot.offlineReward.claimed && (
           <OfflineRewardModal
             reward={snapshot.offlineReward}
+            offlineBonusPreview={snapshot.monetization.offlineBonusPreview}
             onClaim={handleClaimOfflineRewards}
           />
         )}
@@ -1183,10 +1403,23 @@ export function GameShell() {
 
         {snapshot.phase === 'PAUSED' && (
           <PauseModal
-            soundEnabled={soundEnabled}
-            showRangeRing={snapshot.showRangeRing}
+            mode={pauseModalMode}
+            waveNumber={snapshot.wave.currentWave}
+            summonCost={snapshot.summonCost}
+            forgeStatus={snapshot.forge.status}
+            autoForgeEnabled={snapshot.forge.autoForge.enabled}
+            settings={snapshot.settings}
+            monetization={snapshot.monetization}
+            onChangeMode={(nextMode) => {
+              soundEffects.playClick(500);
+              setPauseModalMode(nextMode);
+            }}
             onResume={handleResume}
             onToggleSound={handleToggleSound}
+            onChangeSoundVolume={handleChangeSoundVolume}
+            onToggleMusic={handleToggleMusic}
+            onChangeMusicVolume={handleChangeMusicVolume}
+            onChangeGraphicsQuality={handleChangeGraphicsQuality}
             onToggleRangeRing={handleToggleRangeRing}
             onReturnToTitle={handleReturnToTitle}
           />
@@ -1225,14 +1458,29 @@ export function GameShell() {
         skillSlots={snapshot.skillSlots}
         goldBalance={snapshot.currencies.gold}
         summonCost={snapshot.summonCost}
-        hasVacantSlot={snapshot.hasVacantSkillSlot}
-        selectedSlotIndex={selectedSlotIndex}
+        pendingSkillCount={snapshot.pendingSkillCount}
+        autoUpgradeEnabled={snapshot.autoUpgrade.enabled}
         highlightedSlotIndex={highlightedSlotIndex}
-        invalidSlotIndex={invalidSlotIndex}
-        mergeablePairAvailable={mergeablePairAvailable}
+        upgradedSlotIndex={upgradedSlotIndex}
         onSummonClick={handleSummonClick}
         onSkillSlotClick={handleSkillSlotClick}
-        onMergeAreaClick={handleMergeAreaClick}
+        onOpenPendingSkills={() => {
+          soundEffects.playClick(520);
+          if (skillModal === 'pending') {
+            setSkillModal(null);
+          } else {
+            openSkillModal('pending', snapshot.pendingSkills[0]?.skillId ?? null);
+          }
+        }}
+        onToggleAutoUpgrade={handleToggleAutoUpgrade}
+        onOpenAutoUpgradeSettings={() => {
+          soundEffects.playClick(520);
+          if (skillModal === 'auto_upgrade_settings') {
+            setSkillModal(null);
+          } else {
+            openSkillModal('auto_upgrade_settings');
+          }
+        }}
       />
     </div>
   );

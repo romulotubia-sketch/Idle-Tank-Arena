@@ -44,6 +44,7 @@ interface ForgeModalProps {
   onToggleAutoForge: () => void;
   onOpenAutoForgeSettings: () => void;
   onEquipForged: () => void;
+  onKeepForged: () => void;
   onDismantleForged: () => void;
   onOpenEquipment: () => void;
   onClose: () => void;
@@ -71,6 +72,7 @@ export function ForgeModal({
   onToggleAutoForge,
   onOpenAutoForgeSettings,
   onEquipForged,
+  onKeepForged,
   onDismantleForged,
   onOpenEquipment,
   onClose,
@@ -127,13 +129,13 @@ export function ForgeModal({
             AUTO {autoEnabled ? 'ON' : 'OFF'}
           </span>
           <span
-            className={`font-mono-tabular text-[11px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+            className={`font-mono-tabular text-[10px] sm:text-[11px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
               isInventoryFull
                 ? 'bg-rose-950/80 border-rose-500/60 text-rose-200'
                 : 'bg-[#10151B] border-white/10 text-slate-300'
             }`}
           >
-            Bag {unequippedCount}/{inventoryCapacity}
+            {unequippedCount}/{inventoryCapacity}
           </span>
         </>
       }
@@ -324,24 +326,40 @@ export function ForgeModal({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={(e) => {
                       e.currentTarget.blur();
                       onEquipForged();
                     }}
-                    className={`min-h-[40px] px-4 rounded-lg border text-xs sm:text-sm font-bold shadow-sm transition-colors active:scale-98 cursor-pointer ${
+                    className={`min-h-[40px] px-3 rounded-lg border text-xs font-bold shadow-sm transition-colors active:scale-98 cursor-pointer ${
                       equipBlockedByFullInventory
                         ? 'bg-[#212934] border-rose-500/45 text-rose-200 hover:bg-[#293240]'
                         : 'bg-amber-500 hover:bg-amber-400 border-amber-300/60 text-slate-950'
                     }`}
                   >
                     {equipBlockedByFullInventory
-                      ? 'Inventory Full (Cannot Swap)'
+                      ? 'Inventory Full'
                       : currentlyEquipped
-                        ? 'Equip & Replace Current'
+                        ? 'Equip & Replace'
                         : 'Equip Now'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onKeepForged();
+                    }}
+                    className={`min-h-[40px] px-3 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors active:scale-98 cursor-pointer ${
+                      isInventoryFull
+                        ? 'bg-[#212934] border-rose-500/45 text-rose-200 hover:bg-[#293240]'
+                        : 'bg-[#202935] hover:bg-[#2A3646] border-sky-500/45 text-sky-200'
+                    }`}
+                  >
+                    <Package className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <span>{isInventoryFull ? 'Bag Full' : 'Keep in Bag'}</span>
                   </button>
 
                   <button
@@ -350,13 +368,13 @@ export function ForgeModal({
                       e.currentTarget.blur();
                       onDismantleForged();
                     }}
-                    className="min-h-[40px] px-4 rounded-lg bg-[#202935] hover:bg-[#2A3646] border border-slate-500/50 text-xs sm:text-sm font-bold text-slate-100 flex items-center justify-center gap-2 transition-colors active:scale-98 cursor-pointer"
+                    className="min-h-[40px] px-3 rounded-lg bg-[#202935] hover:bg-[#2A3646] border border-slate-500/50 text-xs font-bold text-slate-100 flex items-center justify-center gap-1.5 transition-colors active:scale-98 cursor-pointer"
                   >
-                    <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                     <span>Dismantle</span>
-                    <span className="inline-flex items-center gap-1 font-mono-tabular text-amber-300">
+                    <span className="inline-flex items-center gap-0.5 font-mono-tabular text-amber-300">
                       (+{dismantleValue}
-                      <Coins className="w-3.5 h-3.5 shrink-0" />)
+                      <Coins className="w-3 h-3 shrink-0" />)
                     </span>
                   </button>
                 </div>
@@ -372,7 +390,7 @@ export function ForgeModal({
                   >
                     <Play className="w-3.5 h-3.5 shrink-0" />
                     <span>
-                      {isInventoryFull
+                      {autoForge.stopReason === 'inventory_full' || isInventoryFull
                         ? 'Resume Auto Forge'
                         : 'Auto-Process & Continue'}
                     </span>
@@ -647,6 +665,64 @@ export function ForgeModal({
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Persistent Auto Forge Status & Session Counters (always visible when result is pending too) */}
+        {hasResult && pendingItem && (
+          <div className="w-full max-w-2xl mx-auto p-2.5 rounded-xl bg-[#151B23] border border-white/10 flex flex-col gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-block w-2 h-2 rounded-full ${
+                    autoEnabled
+                      ? 'bg-emerald-400 animate-pulse'
+                      : 'bg-slate-500'
+                  }`}
+                />
+                <span className="text-xs font-bold text-white">
+                  Auto Forge: {autoEnabled ? 'ON' : 'OFF'}
+                </span>
+                {!autoEnabled && autoForge.stopReason && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-500/40 text-amber-200">
+                    {STOP_REASON_BADGE[autoForge.stopReason]}
+                  </span>
+                )}
+              </div>
+              <span className="font-mono-tabular text-[10px] text-slate-400">
+                Total Forged: <strong className="text-slate-200">{forge.totalForged}</strong>
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <div className="px-2.5 py-1.5 rounded-lg bg-[#10151B] border border-white/10 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Coins Spent</span>
+                <span className="font-mono-tabular font-bold text-amber-300">
+                  {session.coinsSpent}
+                  {settings.spendingLimitEnabled
+                    ? `/${settings.maxCoinSpend}`
+                    : ''}
+                </span>
+              </div>
+              <div className="px-2.5 py-1.5 rounded-lg bg-[#10151B] border border-white/10 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Forged</span>
+                <span className="font-mono-tabular font-bold text-white">
+                  {session.itemsForged}
+                </span>
+              </div>
+              <div className="px-2.5 py-1.5 rounded-lg bg-[#10151B] border border-white/10 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Kept</span>
+                <span className="font-mono-tabular font-bold text-emerald-400">
+                  {session.itemsKept}
+                </span>
+              </div>
+              <div className="px-2.5 py-1.5 rounded-lg bg-[#10151B] border border-white/10 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Dismantled</span>
+                <span className="font-mono-tabular font-bold text-rose-300">
+                  {session.itemsDismantled}
+                </span>
               </div>
             </div>
           </div>
