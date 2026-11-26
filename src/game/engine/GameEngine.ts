@@ -1,5 +1,6 @@
 import { soundEffects } from '../../audio/soundEffects';
 import { playgamaBridge } from '../../platform/playgamaBridge';
+import { GAME_BALANCE } from '../balanceConfig';
 import { BOSS_CONFIG, COMBAT_CONFIG, INITIAL_TANK_STATS } from '../constants';
 import { EQUIPMENT_RARITY_CONFIG } from '../data/equipmentCatalog';
 import { BattlefieldSystem } from '../systems/BattlefieldSystem';
@@ -13,6 +14,7 @@ import {
   EquipmentSystem,
 } from '../systems/EquipmentSystem';
 import {
+  AutoForgeStepOutcome,
   ForgeDismantleResult,
   ForgeEquipResult,
   ForgeKeepResult,
@@ -20,6 +22,7 @@ import {
   StartForgeResult,
 } from '../systems/ForgeSystem';
 import { InventorySystem } from '../systems/InventorySystem';
+import { OfflineProgressSystem } from '../systems/OfflineProgressSystem';
 import { SaveSystem } from '../systems/SaveSystem';
 import {
   SkillCollectionSystem,
@@ -32,6 +35,8 @@ import { TankSystem } from '../systems/TankSystem';
 import { UpgradePurchaseResult, UpgradeSystem } from '../systems/UpgradeSystem';
 import { WaveSystem } from '../systems/WaveSystem';
 import {
+  AutoForgeSettings,
+  BattleRecoveryState,
   BattleSummary,
   BossHudState,
   EquipmentItem,
@@ -39,6 +44,8 @@ import {
   EquipmentSlotType,
   GameHudSnapshot,
   GamePhase,
+  OfflineRewardSummary,
+  SaveStatusNotice,
   SkillId,
   TankStats,
   UpgradeId,
@@ -78,8 +85,21 @@ export class GameEngine {
   private rafId: number | null = null;
   private lastTimestamp = 0;
   private hudSyncAccumulator = 0;
+  private autoSaveAccumulator = 0;
+  private saveDirty = false;
+  private lastOfflineRewardAt = Date.now();
+  private pendingOfflineReward: OfflineRewardSummary | null = null;
+  private claimedOfflineSources = new Set<number>();
+  private saveNotice: SaveStatusNotice | null = null;
   private waveEventCounter = 0;
   private lastWaveEvent: WaveHudEvent | null = null;
+  private playerDamageFlashTimer = 0;
+  private isRecovering = false;
+  private recoveryWave = 1;
+  private recoveryRemainingSec = 0;
+  private readonly recoveryTotalSec = GAME_BALANCE.battleRecovery.delaySec;
+  private recoveryHudAccumulator = 0;
+  private lastBossAnnouncedWave = 0;
   private listeners = new Set<SnapshotListener>();
 
   constructor() {
@@ -98,24 +118,48 @@ export class GameEngine {
 
   async initialize(): Promise<void> {
     await playgamaBridge.init();
-    const saved = await this.saveSystem.load();
-    if (saved) {
+    await this.loadFromStorage();
+    playgamaBridge.notifyGameReady();
+    this.emitSnapshot();
+  }
+
+  async loadFromStorage(): Promise<void> {
+    const report = await this.saveSystem.loadWithReport();
+    this.saveNotice = report.notice;
+
+    if (report.payload) {
+      const saved = report.payload;
       this.waves.loadState(saved.wave);
       this.currencies.loadBalances(saved.currencies);
       this.upgrades.loadState(saved.upgrades);
       this.equipment.loadState(saved.equipment);
       this.forge.loadState(saved.forge);
       this.skillCollection.loadState(saved.skillCollection);
-      const computedStats = this.recomputeCombinedTankStats();
-      this.tank.applyStats({
-        ...computedStats,
-        hp: computedStats.maxHp,
-      });
       this.soundEnabled = saved.soundEnabled;
       this.showRangeRing = saved.showRangeRing;
+      this.lastOfflineRewardAt =
+        typeof saved.lastOfflineRewardAt === 'number' &&
+        Number.isFinite(saved.lastOfflineRewardAt) &&
+        saved.lastOfflineRewardAt > 0
+          ? saved.lastOfflineRewardAt
+          : saved.savedAt;
+
+      // Always initialize a clean battlefield using saved permanent progression
+      this.prepareCleanBattlefield({ resetWaveToOne: false });
+
+      if (!this.claimedOfflineSources.has(this.lastOfflineRewardAt)) {
+        const calculated = OfflineProgressSystem.calculateOfflineRewards({
+          lastRewardTimestampMs: this.lastOfflineRewardAt,
+          waveNumber: this.waves.getState().currentWave,
+        });
+        this.pendingOfflineReward = calculated;
+      } else {
+        this.pendingOfflineReward = null;
+      }
+    } else {
+      this.lastOfflineRewardAt = Date.now();
+      this.pendingOfflineReward = null;
     }
-    playgamaBridge.notifyGameReady();
-    this.emitSnapshot();
   }
 
   private recomputeCombinedTankStats(): TankStats {
@@ -163,10 +207,20 @@ export class GameEngine {
         }
       : null;
 
+    const recovery: BattleRecoveryState | null = this.isRecovering
+      ? {
+          active: true,
+          wave: this.recoveryWave,
+          remainingSec: this.recoveryRemainingSec,
+          totalSec: this.recoveryTotalSec,
+        }
+      : null;
+
     return {
       phase: this.phase,
       wave: waveState,
       boss,
+      recovery,
       waveEvent: this.lastWaveEvent ? { ...this.lastWaveEvent } : null,
       currencies: this.currencies.getBalances(),
       tank: {
@@ -192,6 +246,10 @@ export class GameEngine {
       showRangeRing: this.showRangeRing,
       summonCost: this.skillSummon.getCost(),
       hasVacantSkillSlot: this.skills.hasVacantSlot(),
+      offlineReward: this.pendingOfflineReward
+        ? { ...this.pendingOfflineReward }
+        : null,
+      saveNotice: this.saveNotice ? { ...this.saveNotice } : null,
     };
   }
 
@@ -371,8 +429,51 @@ export class GameEngine {
     return result;
   }
 
+  toggleAutoForge(enable?: boolean): {
+    enabled: boolean;
+    outcome?: AutoForgeStepOutcome;
+  } {
+    const currentlyEnabled = this.forge.autoForge.isEnabled();
+    const target = enable !== undefined ? enable : !currentlyEnabled;
+
+    if (target) {
+      if (this.phase !== 'ACTIVE') {
+        return { enabled: false };
+      }
+      const outcome = this.forge.enableAutoForge(
+        this.currencies,
+        this.equipment
+      );
+      void this.persist();
+      this.emitSnapshot();
+      return { enabled: this.forge.autoForge.isEnabled(), outcome };
+    }
+
+    this.forge.disableAutoForge();
+    void this.persist();
+    this.emitSnapshot();
+    return { enabled: false };
+  }
+
+  updateAutoForgeSettings(
+    partial: Partial<AutoForgeSettings>
+  ): AutoForgeSettings {
+    const updated = this.forge.updateAutoForgeSettings(partial);
+    void this.persist();
+    this.emitSnapshot();
+    return updated;
+  }
+
+  resetAutoForgeSettings(): AutoForgeSettings {
+    const reset = this.forge.resetAutoForgeSettings();
+    void this.persist();
+    this.emitSnapshot();
+    return reset;
+  }
+
   setPhase(nextPhase: GamePhase): void {
     if (this.phase === nextPhase) return;
+    if (this.isRecovering && nextPhase === 'PAUSED') return;
     this.phase = nextPhase;
 
     if (nextPhase !== 'ACTIVE') {
@@ -383,22 +484,49 @@ export class GameEngine {
       playgamaBridge.notifyGameplayStart();
     } else {
       playgamaBridge.notifyGameplayStop();
+      if (nextPhase === 'PAUSED') {
+        void this.persist();
+      }
     }
 
     this.emitSnapshot();
   }
 
-  resetBattleState(): void {
+  private announceBossIncoming(waveNumber: number): void {
+    if (this.lastBossAnnouncedWave === waveNumber) return;
+    this.lastBossAnnouncedWave = waveNumber;
+    this.lastWaveEvent = {
+      id: ++this.waveEventCounter,
+      kind: 'boss_spawn',
+      wave: waveNumber,
+      isBossWave: true,
+      rewardGold: 0,
+      bossName: BOSS_CONFIG.name,
+    };
+    soundEffects.playBossAlert();
+  }
+
+  prepareCleanBattlefield(options: { resetWaveToOne: boolean }): void {
     const center = this.battlefield.getCenter();
     const combinedStats = this.recomputeCombinedTankStats();
-    this.tank.applyStats(combinedStats);
+    this.tank.applyStats({
+      ...combinedStats,
+      hp: combinedStats.maxHp,
+    });
     this.tank.resetForBattle(center.x, center.y);
     this.enemies.clear();
     this.combat.clear();
     this.skills.resetToEmpty();
-    this.currencies.reset();
-    this.waves.resetForNewRun();
+    if (options.resetWaveToOne) {
+      this.waves.resetForNewRun();
+    } else {
+      // Refresh current wave spawn plan with clean enemy/transition counters
+      this.waves.restartWave(this.waves.getState().currentWave);
+    }
     this.lastWaveEvent = null;
+    this.lastBossAnnouncedWave = 0;
+    this.playerDamageFlashTimer = 0;
+    this.renderer.getCamera().resetEffects();
     this.battleStats = {
       enemiesDefeated: 0,
       elapsedSeconds: 0,
@@ -406,17 +534,145 @@ export class GameEngine {
     this.hudSyncAccumulator = 0;
   }
 
-  restartBattle(): void {
-    this.resetBattleState();
+  resetBattleState(): void {
+    this.isRecovering = false;
+    this.recoveryRemainingSec = 0;
+    this.prepareCleanBattlefield({ resetWaveToOne: true });
+  }
+
+  startFromTitle(): void {
+    this.isRecovering = false;
+    this.recoveryRemainingSec = 0;
+    this.prepareCleanBattlefield({ resetWaveToOne: false });
     this.phase = 'ACTIVE';
+    const currentWave = this.waves.getState();
+    if (currentWave.isBossWave) {
+      this.enemies.resetSpawnTimer(0.55);
+      this.announceBossIncoming(currentWave.currentWave);
+    }
+    if (this.forge.consumePendingAutoResume()) {
+      this.forge.enableAutoForge(this.currencies, this.equipment);
+    }
+    playgamaBridge.notifyGameplayStart();
+    void this.persist();
+    this.emitSnapshot();
+  }
+
+  restartBattle(): void {
+    this.isRecovering = false;
+    this.recoveryRemainingSec = 0;
+    this.prepareCleanBattlefield({ resetWaveToOne: false });
+    this.phase = 'ACTIVE';
+    const currentWave = this.waves.getState();
+    if (currentWave.isBossWave) {
+      this.enemies.resetSpawnTimer(0.55);
+      this.announceBossIncoming(currentWave.currentWave);
+    }
     playgamaBridge.notifyGameplayStart();
     void this.persist();
     this.emitSnapshot();
   }
 
   returnToTitle(): void {
-    this.resetBattleState();
-    this.setPhase('TITLE');
+    this.isRecovering = false;
+    this.recoveryRemainingSec = 0;
+    this.prepareCleanBattlefield({ resetWaveToOne: false });
+    this.phase = 'TITLE';
+    this.tank.setMoveInput(0, 0);
+    playgamaBridge.notifyGameplayStop();
+    void this.persist();
+    this.emitSnapshot();
+  }
+
+  beginBattleRecovery(): void {
+    if (this.isRecovering || this.phase !== 'ACTIVE') return;
+
+    this.isRecovering = true;
+    this.recoveryWave = Math.max(1, this.waves.getState().currentWave);
+    this.recoveryRemainingSec = this.recoveryTotalSec;
+    this.recoveryHudAccumulator = 0;
+
+    // Immediately stop active combat, clean temporary entities, and block further damage/rewards
+    this.tank.setMoveInput(0, 0);
+    this.enemies.clear();
+    this.combat.clear();
+    this.skills.resetToEmpty();
+    this.lastWaveEvent = null;
+    this.playerDamageFlashTimer = 0;
+    this.phase = 'DEFEAT';
+
+    soundEffects.playDefeat();
+    playgamaBridge.notifyGameplayStop();
+
+    if (this.saveDirty) {
+      void this.persist();
+    }
+
+    this.emitSnapshot();
+  }
+
+  private completeBattleRecovery(): void {
+    if (!this.isRecovering || this.phase !== 'DEFEAT') return;
+
+    const waveToReplay = Math.max(1, this.recoveryWave);
+    this.isRecovering = false;
+    this.recoveryRemainingSec = 0;
+    this.recoveryHudAccumulator = 0;
+
+    this.waves.restartWave(waveToReplay);
+    this.prepareCleanBattlefield({ resetWaveToOne: false });
+    this.phase = 'ACTIVE';
+
+    if (this.waves.getState().isBossWave) {
+      this.enemies.resetSpawnTimer(0.55);
+      this.announceBossIncoming(waveToReplay);
+    }
+
+    soundEffects.playDeploy();
+    playgamaBridge.notifyGameplayStart();
+    this.emitSnapshot();
+  }
+
+  claimOfflineRewards(): { success: boolean; coinsAwarded: number } {
+    const reward = this.pendingOfflineReward;
+    if (
+      !reward ||
+      reward.claimed ||
+      this.claimedOfflineSources.has(reward.sourceTimestamp)
+    ) {
+      return { success: false, coinsAwarded: 0 };
+    }
+
+    reward.claimed = true;
+    this.claimedOfflineSources.add(reward.sourceTimestamp);
+    this.pendingOfflineReward = null;
+
+    if (reward.coinsEarned > 0) {
+      this.currencies.add('gold', reward.coinsEarned);
+    }
+    this.lastOfflineRewardAt = Math.max(
+      this.lastOfflineRewardAt,
+      reward.calculatedAt,
+      Date.now()
+    );
+
+    void this.persist();
+    this.emitSnapshot();
+    return { success: true, coinsAwarded: reward.coinsEarned };
+  }
+
+  dismissSaveNotice(options?: { overwriteCorruptWithFresh?: boolean }): void {
+    this.saveNotice = null;
+    if (options?.overwriteCorruptWithFresh) {
+      this.saveSystem.clearCorruptProtection();
+      void this.persist({ forceOverwrite: true });
+    }
+    this.emitSnapshot();
+  }
+
+  async retrySaveRecovery(): Promise<void> {
+    await this.loadFromStorage();
+    this.emitSnapshot();
   }
 
   toggleRangeRing(): void {
@@ -434,23 +690,406 @@ export class GameEngine {
     return this.soundEnabled;
   }
 
-  async persist(): Promise<void> {
-    await this.saveSystem.save({
-      wave: this.waves.getState(),
-      currencies: this.currencies.getBalances(),
-      tankStats: this.tank.getState().stats,
-      upgrades: this.upgrades.exportState(),
-      equipment: this.equipment.exportState(),
-      forge: this.forge.exportState(),
-      skillCollection: this.skillCollection.exportState(),
-      soundEnabled: this.soundEnabled,
-      showRangeRing: this.showRangeRing,
-    });
+  async persistIfDirty(): Promise<void> {
+    if (!this.saveDirty) return;
+    await this.persist();
+  }
+
+  async persist(options?: { forceOverwrite?: boolean }): Promise<void> {
+    // Only advance the offline-reward anchor when no unclaimed offline reward is waiting
+    if (!this.pendingOfflineReward) {
+      this.lastOfflineRewardAt = Math.max(this.lastOfflineRewardAt, Date.now());
+    }
+
+    const saved = await this.saveSystem.save(
+      {
+        lastOfflineRewardAt: this.lastOfflineRewardAt,
+        wave: this.waves.exportPersistentState(),
+        currencies: this.currencies.getBalances(),
+        tankStats: this.tank.getState().stats,
+        upgrades: this.upgrades.exportState(),
+        equipment: this.equipment.exportState(),
+        forge: this.forge.exportState(),
+        skillCollection: this.skillCollection.exportState(),
+        soundEnabled: this.soundEnabled,
+        showRangeRing: this.showRangeRing,
+      },
+      options
+    );
+    if (saved) {
+      this.saveDirty = false;
+      this.autoSaveAccumulator = 0;
+    }
   }
 
   private emitSnapshot(): void {
     const snap = this.getSnapshot();
     this.listeners.forEach((listener) => listener(snap));
+  }
+
+  step(rawDt: number): void {
+    const dt = Math.max(0, Math.min(rawDt, 0.1));
+
+    if (this.phase === 'DEFEAT') {
+      this.renderer.getCamera().update(dt, this.reducedMotion);
+      if (!this.isRecovering) {
+        this.isRecovering = true;
+        this.recoveryWave = Math.max(1, this.waves.getState().currentWave);
+        this.recoveryRemainingSec = this.recoveryTotalSec;
+      }
+      this.recoveryRemainingSec = Math.max(0, this.recoveryRemainingSec - dt);
+      if (this.recoveryRemainingSec <= 0) {
+        this.completeBattleRecovery();
+        return;
+      }
+      this.recoveryHudAccumulator += dt;
+      if (this.recoveryHudAccumulator >= 0.05) {
+        this.recoveryHudAccumulator = 0;
+        this.emitSnapshot();
+      }
+      return;
+    }
+
+    if (this.phase !== 'ACTIVE') return;
+
+    // Safety check if tank HP was already zeroed
+    if (this.tank.getState().stats.hp <= 0) {
+      this.beginBattleRecovery();
+      return;
+    }
+
+    this.battleStats.elapsedSeconds += dt;
+    const bounds = this.battlefield.getBounds();
+    const tankState = this.tank.getState();
+
+    let hudDirty = false;
+    let playerDefeated = false;
+
+    this.battlefield.update(dt);
+    this.renderer.getCamera().update(dt, this.reducedMotion);
+    if (this.playerDamageFlashTimer > 0) {
+      this.playerDamageFlashTimer = Math.max(0, this.playerDamageFlashTimer - dt);
+    }
+
+    // Advance active equipment forge timer (~2s) and process Auto Forge if enabled
+    const currentForgeStatus = this.forge.getState().status;
+    if (currentForgeStatus === 'forging') {
+      const forgedItem = this.forge.update(dt);
+      if (forgedItem) {
+        if (this.forge.autoForge.isEnabled()) {
+          const autoOutcome = this.forge.processAutoForgeStep(
+            this.currencies,
+            this.equipment
+          );
+          if (autoOutcome.kept && autoOutcome.item) {
+            soundEffects.playForgeComplete(
+              EQUIPMENT_RARITY_CONFIG[autoOutcome.item.rarity].tier
+            );
+          } else if (autoOutcome.dismantled) {
+            soundEffects.playDismantle();
+          }
+          if (
+            autoOutcome.stoppedReason &&
+            autoOutcome.stoppedReason !== 'manual'
+          ) {
+            soundEffects.playInvalid();
+          }
+        } else {
+          soundEffects.playForgeComplete(
+            EQUIPMENT_RARITY_CONFIG[forgedItem.rarity].tier
+          );
+        }
+        void this.persist();
+        hudDirty = true;
+      }
+    } else if (this.forge.autoForge.isEnabled()) {
+      const autoOutcome = this.forge.processAutoForgeStep(
+        this.currencies,
+        this.equipment
+      );
+      if (
+        autoOutcome.processedItem ||
+        autoOutcome.startedNextForge ||
+        autoOutcome.stoppedReason
+      ) {
+        if (autoOutcome.stoppedReason && autoOutcome.stoppedReason !== 'manual') {
+          soundEffects.playInvalid();
+        }
+        void this.persist();
+        hudDirty = true;
+      }
+    }
+
+    // 1. Update enemies according to current WavePlan
+    const wavePlan = this.waves.getCurrentPlan();
+    this.enemies.update(
+      dt,
+      bounds,
+      tankState.position,
+      true,
+      wavePlan,
+      this.waves.canSpawnMoreEnemies(),
+      {
+        onEnemySpawned: () => {
+          this.waves.recordEnemySpawned();
+          hudDirty = true;
+        },
+        onBossSpawned: (boss) => {
+          this.combat.spawnBossIntroEffect(boss.position.x, boss.position.y);
+          this.renderer.getCamera().addKick(2.4, this.reducedMotion);
+          this.announceBossIncoming(wavePlan.wave);
+          hudDirty = true;
+        },
+        onAttackPlayer: (atk) => {
+          if (this.phase !== 'ACTIVE' || this.isRecovering || playerDefeated) return;
+          if (atk.behavior === 'artillery_ranged') {
+            this.combat.spawnEnemyArtilleryProjectile(
+              atk.enemyX,
+              atk.enemyY,
+              atk.angle,
+              atk.damage
+            );
+            return;
+          }
+          if (
+            atk.behavior === 'boss' &&
+            (atk.attackMode === 'boss_heavy' || atk.attackMode === 'boss_burst')
+          ) {
+            this.combat.spawnEnemyBossProjectile(
+              atk.enemyX,
+              atk.enemyY,
+              atk.angle,
+              atk.damage,
+              atk.attackMode === 'boss_burst'
+            );
+            return;
+          }
+
+          const dmgRes = this.tank.takeDamage(
+            atk.damage,
+            atk.enemyX,
+            atk.enemyY
+          );
+          if (dmgRes.effectiveDamage > 0) {
+            this.combat.spawnEnemyAttackTracer(
+              atk.enemyX,
+              atk.enemyY,
+              tankState.position.x,
+              tankState.position.y,
+              dmgRes.effectiveDamage,
+              Boolean(atk.isBoss),
+              atk.kind
+            );
+            this.playerDamageFlashTimer = atk.isBoss ? 0.24 : 0.17;
+            this.renderer
+              .getCamera()
+              .addKick(atk.isBoss ? 2.2 : 1.2, this.reducedMotion);
+            soundEffects.playHit();
+            hudDirty = true;
+          }
+          if (dmgRes.defeated) {
+            playerDefeated = true;
+          }
+        },
+        onBossSiegeStrike: (strike) => {
+          if (this.phase !== 'ACTIVE' || this.isRecovering || playerDefeated) return;
+          const dist = Math.hypot(
+            tankState.position.x - strike.targetX,
+            tankState.position.y - strike.targetY
+          );
+          // Match visual danger circle closely so warning and hit area stay consistent
+          const hitRadius =
+            strike.radius + COMBAT_CONFIG.tankCollisionRadius * 0.35;
+          let effectiveDamage = 0;
+          if (dist <= hitRadius) {
+            const dmgRes = this.tank.takeDamage(
+              strike.damage,
+              strike.targetX,
+              strike.targetY
+            );
+            effectiveDamage = dmgRes.effectiveDamage;
+            if (effectiveDamage > 0) {
+              this.playerDamageFlashTimer = 0.28;
+            }
+            if (dmgRes.defeated) {
+              playerDefeated = true;
+            }
+          }
+          this.combat.spawnBossSiegeImpact(
+            strike.targetX,
+            strike.targetY,
+            strike.radius,
+            effectiveDamage
+          );
+          this.renderer.getCamera().addKick(2.8, this.reducedMotion);
+          soundEffects.playExplosion();
+          hudDirty = true;
+        },
+        onEnemyDestroyed: (evt) => {
+          if (evt.isBoss) {
+            this.renderer.getCamera().addKick(3.2, this.reducedMotion);
+          }
+        },
+      }
+    );
+
+    if (playerDefeated) {
+      this.beginBattleRecovery();
+      return;
+    }
+
+    // 2. Update tank movement/targeting, modular skills, and projectiles/mines
+    const fireOut = this.tank.update(
+      dt,
+      true,
+      this.enemies.getActiveEnemies()
+    );
+    if (fireOut) {
+      this.combat.spawnTankProjectile(
+        fireOut.muzzleX,
+        fireOut.muzzleY,
+        fireOut.angle,
+        fireOut.damage,
+        fireOut.isCrit
+      );
+      this.renderer
+        .getCamera()
+        .addKick(fireOut.isCrit ? 1.3 : 0.65, this.reducedMotion);
+      soundEffects.playCannonFire();
+    }
+
+    const skillStepResult: CombatStepResult = {
+      enemyHits: 0,
+      enemiesDestroyed: 0,
+      goldEarned: 0,
+    };
+    this.skills.update(dt, {
+      tank: tankState,
+      bounds,
+      enemySystem: this.enemies,
+      combat: this.combat,
+      result: skillStepResult,
+      getCollectionBonuses: (skillId) =>
+        this.skillCollection.getComputedBonuses(skillId),
+    });
+
+    const combatResult = this.combat.update(
+      dt,
+      bounds,
+      this.enemies,
+      true,
+      tankState.position,
+      (projHit) => {
+        if (this.phase !== 'ACTIVE' || this.isRecovering || playerDefeated) {
+          return true;
+        }
+        const dmgRes = this.tank.takeDamage(
+          projHit.damage,
+          projHit.fromX,
+          projHit.fromY
+        );
+        if (dmgRes.effectiveDamage > 0) {
+          this.combat.spawnEnemyProjectileHit(
+            projHit.fromX,
+            projHit.fromY,
+            tankState.position.x,
+            tankState.position.y,
+            dmgRes.effectiveDamage
+          );
+          this.playerDamageFlashTimer = 0.22;
+          this.renderer.getCamera().addKick(1.8, this.reducedMotion);
+          soundEffects.playExplosion();
+          hudDirty = true;
+        }
+        if (dmgRes.defeated) {
+          playerDefeated = true;
+          return true;
+        }
+        return false;
+      }
+    );
+
+    if (playerDefeated) {
+      this.beginBattleRecovery();
+      return;
+    }
+
+    const totalHits = combatResult.enemyHits + skillStepResult.enemyHits;
+    const totalDestroyed =
+      combatResult.enemiesDestroyed + skillStepResult.enemiesDestroyed;
+    const totalGold =
+      combatResult.goldEarned + skillStepResult.goldEarned;
+
+    if (totalHits > 0) {
+      soundEffects.playHit();
+      if (this.enemies.getActiveBoss()) {
+        hudDirty = true;
+      }
+    }
+    if (totalDestroyed > 0) {
+      this.battleStats.enemiesDefeated += totalDestroyed;
+      for (let k = 0; k < totalDestroyed; k++) {
+        this.waves.recordEnemyDefeated();
+      }
+      if (tankState.stats.hpOnKill > 0) {
+        this.tank.heal(totalDestroyed * tankState.stats.hpOnKill);
+      }
+      if (totalGold > 0) {
+        this.currencies.add('gold', totalGold);
+        this.saveDirty = true;
+      }
+      soundEffects.playExplosion();
+      hudDirty = true;
+    }
+
+    // 3. Evaluate wave completion & automatic next-wave transitions
+    const waveStep = this.waves.update(dt, this.enemies.countAliveEnemies());
+    if (waveStep.completedEvent) {
+      if (waveStep.completedEvent.rewardGold > 0) {
+        this.currencies.add('gold', waveStep.completedEvent.rewardGold);
+      }
+      this.lastWaveEvent = {
+        id: ++this.waveEventCounter,
+        kind: 'wave_clear',
+        wave: waveStep.completedEvent.wave,
+        isBossWave: waveStep.completedEvent.isBossWave,
+        rewardGold: waveStep.completedEvent.rewardGold,
+        bossName: waveStep.completedEvent.isBossWave ? BOSS_CONFIG.name : undefined,
+      };
+      soundEffects.playWaveClear();
+      void this.persist();
+      hudDirty = true;
+    }
+    if (waveStep.startedWave !== null) {
+      this.enemies.resetSpawnTimer(waveStep.startedBossWave ? 0.55 : 0.35);
+      if (waveStep.startedBossWave) {
+        this.announceBossIncoming(waveStep.startedWave);
+      }
+      void this.persist();
+      hudDirty = true;
+    }
+
+    // Throttled periodic auto-save during active combat when progression changed
+    if (this.saveDirty) {
+      this.autoSaveAccumulator += dt;
+      if (this.autoSaveAccumulator >= 8.0) {
+        this.autoSaveAccumulator = 0;
+        void this.persist();
+      }
+    }
+
+    // Throttle HUD cooldown ring sync (faster while forging progress bar animates)
+    this.hudSyncAccumulator += dt;
+    const syncInterval =
+      this.forge.getState().status === 'forging' ? 0.045 : 0.1;
+    if (this.hudSyncAccumulator >= syncInterval) {
+      this.hudSyncAccumulator = 0;
+      hudDirty = true;
+    }
+
+    if (hudDirty) {
+      this.emitSnapshot();
+    }
   }
 
   private startLoop(): void {
@@ -460,205 +1099,7 @@ export class GameEngine {
     const tick = (now: number) => {
       const rawDt = (now - this.lastTimestamp) / 1000;
       this.lastTimestamp = now;
-      const dt = Math.max(0, Math.min(rawDt, 0.1));
-
-      const isActive = this.phase === 'ACTIVE';
-      if (isActive) {
-        this.battleStats.elapsedSeconds += dt;
-        const bounds = this.battlefield.getBounds();
-        const tankState = this.tank.getState();
-
-        let hudDirty = false;
-        let playerDefeated = false;
-
-        this.battlefield.update(dt);
-
-        // Advance active equipment forge timer (~2s)
-        if (this.forge.getState().status === 'forging') {
-          const forgedItem = this.forge.update(dt);
-          if (forgedItem) {
-            soundEffects.playForgeComplete(
-              EQUIPMENT_RARITY_CONFIG[forgedItem.rarity].tier
-            );
-            void this.persist();
-            hudDirty = true;
-          }
-        }
-
-        // 1. Update enemies according to current WavePlan
-        const wavePlan = this.waves.getCurrentPlan();
-        this.enemies.update(
-          dt,
-          bounds,
-          tankState.position,
-          true,
-          wavePlan,
-          this.waves.canSpawnMoreEnemies(),
-          {
-            onEnemySpawned: () => {
-              this.waves.recordEnemySpawned();
-              hudDirty = true;
-            },
-            onAttackPlayer: (atk) => {
-              if (this.phase !== 'ACTIVE' || playerDefeated) return;
-              const dmgRes = this.tank.takeDamage(atk.damage);
-              if (dmgRes.effectiveDamage > 0) {
-                this.combat.spawnEnemyAttackTracer(
-                  atk.enemyX,
-                  atk.enemyY,
-                  tankState.position.x,
-                  tankState.position.y,
-                  dmgRes.effectiveDamage,
-                  Boolean(atk.isBoss)
-                );
-                soundEffects.playHit();
-                hudDirty = true;
-              }
-              if (dmgRes.defeated) {
-                playerDefeated = true;
-              }
-            },
-            onBossSiegeStrike: (strike) => {
-              if (this.phase !== 'ACTIVE' || playerDefeated) return;
-              const dist = Math.hypot(
-                tankState.position.x - strike.targetX,
-                tankState.position.y - strike.targetY
-              );
-              const hitRadius =
-                strike.radius + COMBAT_CONFIG.tankCollisionRadius * 0.7;
-              let effectiveDamage = 0;
-              if (dist <= hitRadius) {
-                const dmgRes = this.tank.takeDamage(strike.damage);
-                effectiveDamage = dmgRes.effectiveDamage;
-                if (dmgRes.defeated) {
-                  playerDefeated = true;
-                }
-              }
-              this.combat.spawnBossSiegeImpact(
-                strike.targetX,
-                strike.targetY,
-                strike.radius,
-                effectiveDamage
-              );
-              soundEffects.playExplosion();
-              hudDirty = true;
-            },
-            onEnemyDestroyed: () => {},
-          }
-        );
-
-        // 2. If alive, update tank movement/targeting, modular skills, and projectiles/mines
-        if (!playerDefeated) {
-          const fireOut = this.tank.update(
-            dt,
-            true,
-            this.enemies.getActiveEnemies()
-          );
-          if (fireOut) {
-            this.combat.spawnTankProjectile(
-              fireOut.muzzleX,
-              fireOut.muzzleY,
-              fireOut.angle,
-              fireOut.damage,
-              fireOut.isCrit
-            );
-            soundEffects.playCannonFire();
-          }
-
-          const skillStepResult: CombatStepResult = {
-            enemyHits: 0,
-            enemiesDestroyed: 0,
-            goldEarned: 0,
-          };
-          this.skills.update(dt, {
-            tank: tankState,
-            bounds,
-            enemySystem: this.enemies,
-            combat: this.combat,
-            result: skillStepResult,
-            getCollectionBonuses: (skillId) =>
-              this.skillCollection.getComputedBonuses(skillId),
-          });
-
-          const combatResult = this.combat.update(dt, bounds, this.enemies, true);
-          const totalHits = combatResult.enemyHits + skillStepResult.enemyHits;
-          const totalDestroyed =
-            combatResult.enemiesDestroyed + skillStepResult.enemiesDestroyed;
-          const totalGold =
-            combatResult.goldEarned + skillStepResult.goldEarned;
-
-          if (totalHits > 0) {
-            soundEffects.playHit();
-            if (this.enemies.getActiveBoss()) {
-              hudDirty = true;
-            }
-          }
-          if (totalDestroyed > 0) {
-            this.battleStats.enemiesDefeated += totalDestroyed;
-            for (let k = 0; k < totalDestroyed; k++) {
-              this.waves.recordEnemyDefeated();
-            }
-            if (tankState.stats.hpOnKill > 0) {
-              this.tank.heal(totalDestroyed * tankState.stats.hpOnKill);
-            }
-            if (totalGold > 0) {
-              this.currencies.add('gold', totalGold);
-            }
-            soundEffects.playExplosion();
-            hudDirty = true;
-          }
-
-          // 3. Evaluate wave completion & automatic next-wave transitions
-          const waveStep = this.waves.update(dt, this.enemies.countAliveEnemies());
-          if (waveStep.completedEvent) {
-            if (waveStep.completedEvent.rewardGold > 0) {
-              this.currencies.add('gold', waveStep.completedEvent.rewardGold);
-            }
-            this.lastWaveEvent = {
-              id: ++this.waveEventCounter,
-              kind: 'wave_clear',
-              wave: waveStep.completedEvent.wave,
-              isBossWave: waveStep.completedEvent.isBossWave,
-              rewardGold: waveStep.completedEvent.rewardGold,
-            };
-            soundEffects.playWaveClear();
-            void this.persist();
-            hudDirty = true;
-          }
-          if (waveStep.startedWave !== null) {
-            this.enemies.resetSpawnTimer(waveStep.startedBossWave ? 0.55 : 0.35);
-            if (waveStep.startedBossWave) {
-              this.lastWaveEvent = {
-                id: ++this.waveEventCounter,
-                kind: 'boss_spawn',
-                wave: waveStep.startedWave,
-                isBossWave: true,
-                rewardGold: 0,
-              };
-              soundEffects.playBossAlert();
-            }
-            void this.persist();
-            hudDirty = true;
-          }
-
-          // Throttle HUD cooldown ring sync (faster while forging progress bar animates)
-          this.hudSyncAccumulator += dt;
-          const syncInterval =
-            this.forge.getState().status === 'forging' ? 0.045 : 0.1;
-          if (this.hudSyncAccumulator >= syncInterval) {
-            this.hudSyncAccumulator = 0;
-            hudDirty = true;
-          }
-        } else {
-          soundEffects.playDefeat();
-          this.setPhase('DEFEAT');
-          hudDirty = false;
-        }
-
-        if (hudDirty) {
-          this.emitSnapshot();
-        }
-      }
+      this.step(rawDt);
 
       this.renderer.render({
         bounds: this.battlefield.getBounds(),
@@ -668,8 +1109,12 @@ export class GameEngine {
         mines: this.combat.getMines(),
         effects: this.combat.getEffects(),
         showRangeRing: this.showRangeRing,
-        isActive,
+        isActive: this.phase === 'ACTIVE',
         reducedMotion: this.reducedMotion,
+        damageVignetteAlpha:
+          this.reducedMotion || this.playerDamageFlashTimer <= 0
+            ? 0
+            : Math.min(0.24, (this.playerDamageFlashTimer / 0.24) * 0.22),
       });
 
       this.rafId = window.requestAnimationFrame(tick);

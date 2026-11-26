@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../balanceConfig';
 import { ALL_SKILL_IDS, SKILL_SLOT_COUNT } from '../constants';
 import { SkillId, SummonRule } from '../types';
 import { CurrencySystem } from './CurrencySystem';
@@ -23,7 +24,8 @@ export class SkillSummonSystem {
 
   private pool: SkillId[] = [...ALL_SKILL_IDS];
   private lastSummonTimestampMs = 0;
-  private readonly minSummonIntervalMs = 240;
+  private readonly minSummonIntervalMs =
+    GAME_BALANCE.skillMerge.minSummonIntervalMs;
 
   getRule(): SummonRule {
     return { ...this.rule };

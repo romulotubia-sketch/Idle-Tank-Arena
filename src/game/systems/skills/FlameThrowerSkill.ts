@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../../balanceConfig';
 import { SkillDefinition } from '../../types';
 import {
   applySkillDamageBonus,
@@ -8,21 +9,7 @@ import {
   SkillExecutionContext,
 } from './BaseSkill';
 
-interface FlameLevelSpec {
-  damage: number;
-  interval: number;
-  range: number;
-  coneHalfAngle: number;
-  closeBonusRatio: number;
-}
-
-const FLAME_LEVELS: readonly FlameLevelSpec[] = [
-  { damage: 9, interval: 0.35, range: 155, coneHalfAngle: 0.44, closeBonusRatio: 1.0 },   // Lv1
-  { damage: 12, interval: 0.31, range: 170, coneHalfAngle: 0.5, closeBonusRatio: 1.1 },  // Lv2
-  { damage: 16, interval: 0.28, range: 185, coneHalfAngle: 0.56, closeBonusRatio: 1.2 }, // Lv3: Wider flame arc
-  { damage: 21, interval: 0.24, range: 202, coneHalfAngle: 0.62, closeBonusRatio: 1.35 }, // Lv4: Intense inner sear
-  { damage: 28, interval: 0.21, range: 220, coneHalfAngle: 0.7, closeBonusRatio: 1.5 },   // Lv5: Napalm surge
-];
+const FLAME_LEVELS = GAME_BALANCE.skills.flame_thrower;
 
 function normalizeAngle(angle: number): number {
   while (angle > Math.PI) angle -= Math.PI * 2;

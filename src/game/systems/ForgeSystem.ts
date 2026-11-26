@@ -1,12 +1,15 @@
 import { FORGE_CONFIG } from '../constants';
 import { generateForgedEquipmentItem } from '../data/equipmentCatalog';
 import {
+  AutoForgeSettings,
+  AutoForgeStopReason,
   EquipmentItem,
   ForgeRecipeSlot,
   ForgeState,
   ForgeStatus,
   SavedForgeState,
 } from '../types';
+import { AutoForgeSystem } from './AutoForgeSystem';
 import { CurrencySystem } from './CurrencySystem';
 import { EquipActionResult, EquipmentSystem } from './EquipmentSystem';
 
@@ -16,7 +19,8 @@ export interface StartForgeResult {
     | 'already_forging'
     | 'result_pending'
     | 'insufficient_currency'
-    | 'inventory_full';
+    | 'inventory_full'
+    | 'auto_forge_active';
   costCoins?: number;
 }
 
@@ -39,7 +43,19 @@ export interface ForgeKeepResult {
   item?: EquipmentItem;
 }
 
+export interface AutoForgeStepOutcome {
+  processedItem: boolean;
+  kept?: boolean;
+  dismantled?: boolean;
+  coinsAwarded?: number;
+  item?: EquipmentItem;
+  stoppedReason?: AutoForgeStopReason;
+  startedNextForge?: boolean;
+}
+
 export class ForgeSystem {
+  readonly autoForge = new AutoForgeSystem();
+
   private readonly forgeConfig: ForgeRecipeSlot = {
     level: 1,
     scrapCost: FORGE_CONFIG.costCoins,
@@ -80,6 +96,7 @@ export class ForgeSystem {
           }
         : null,
       totalForged: this.totalForged,
+      autoForge: this.autoForge.getState(),
     };
   }
 
@@ -91,6 +108,9 @@ export class ForgeSystem {
     currencies: CurrencySystem,
     equipment?: EquipmentSystem
   ): StartForgeResult {
+    if (this.autoForge.isEnabled()) {
+      return { success: false, reason: 'auto_forge_active' };
+    }
     if (this.status === 'forging') {
       return { success: false, reason: 'already_forging' };
     }
@@ -123,6 +143,142 @@ export class ForgeSystem {
     this.elapsedSec = 0;
     this.pendingItem = null;
     return { success: true, costCoins: cost };
+  }
+
+  private startAutoForgeCycle(currencies: CurrencySystem): {
+    success: boolean;
+    costCoins?: number;
+  } {
+    if (!this.autoForge.isEnabled()) {
+      return { success: false };
+    }
+    if (this.status !== 'idle' || this.pendingItem !== null) {
+      return { success: false };
+    }
+
+    const cost = FORGE_CONFIG.costCoins;
+    const balance = currencies.getBalances().gold;
+    const budgetCheck = this.autoForge.canSpendForForge(cost, balance);
+    if (!budgetCheck.allowed) {
+      this.autoForge.stop(budgetCheck.stopReason ?? 'insufficient_coins');
+      return { success: false };
+    }
+
+    const spent = currencies.spend('gold', cost);
+    if (!spent) {
+      this.autoForge.stop('insufficient_coins');
+      return { success: false };
+    }
+
+    this.status = 'forging';
+    this.elapsedSec = 0;
+    this.pendingItem = null;
+    this.autoForge.recordCoinSpent(cost);
+    return { success: true, costCoins: cost };
+  }
+
+  enableAutoForge(
+    currencies: CurrencySystem,
+    equipment: EquipmentSystem
+  ): AutoForgeStepOutcome {
+    if (this.autoForge.isEnabled()) {
+      return { processedItem: false };
+    }
+    this.autoForge.startSession();
+    return this.processAutoForgeStep(currencies, equipment);
+  }
+
+  disableAutoForge(): void {
+    this.autoForge.stop('manual');
+  }
+
+  updateAutoForgeSettings(
+    partial: Partial<AutoForgeSettings>
+  ): AutoForgeSettings {
+    return this.autoForge.setSettings(partial);
+  }
+
+  resetAutoForgeSettings(): AutoForgeSettings {
+    return this.autoForge.resetSettings();
+  }
+
+  consumePendingAutoResume(): boolean {
+    return this.autoForge.consumePendingAutoResume();
+  }
+
+  processAutoForgeStep(
+    currencies: CurrencySystem,
+    equipment: EquipmentSystem
+  ): AutoForgeStepOutcome {
+    if (!this.autoForge.isEnabled()) {
+      return { processedItem: false };
+    }
+
+    if (this.status === 'result_ready' && this.pendingItem) {
+      this.autoForge.recordItemForgedIfNeeded(this.pendingItem.uid);
+      const evaluation = this.autoForge.evaluateItem(this.pendingItem);
+
+      if (evaluation.keep) {
+        const keepResult = this.resolveKeepInInventory(equipment);
+        if (keepResult.success && keepResult.item) {
+          this.autoForge.recordKept(keepResult.item);
+          const next = this.startAutoForgeCycle(currencies);
+          return {
+            processedItem: true,
+            kept: true,
+            item: keepResult.item,
+            startedNextForge: next.success,
+            stoppedReason: next.success
+              ? null
+              : this.autoForge.getState().stopReason,
+          };
+        }
+
+        // Inventory is full: keep forged item safely in Forge and stop Auto Forge
+        this.autoForge.stop('inventory_full');
+        return {
+          processedItem: true,
+          kept: false,
+          stoppedReason: 'inventory_full',
+        };
+      }
+
+      // Failed filter requirements: dismantle using existing dismantle rules
+      const dismantleResult = this.resolveDismantle(currencies);
+      if (dismantleResult.success && dismantleResult.dismantledItem) {
+        const coinsAwarded = dismantleResult.coinsAwarded ?? 0;
+        this.autoForge.recordDismantled(
+          dismantleResult.dismantledItem,
+          coinsAwarded
+        );
+        const next = this.startAutoForgeCycle(currencies);
+        return {
+          processedItem: true,
+          dismantled: true,
+          item: dismantleResult.dismantledItem,
+          coinsAwarded,
+          startedNextForge: next.success,
+          stoppedReason: next.success
+            ? null
+            : this.autoForge.getState().stopReason,
+        };
+      }
+
+      return { processedItem: false };
+    }
+
+    if (this.status === 'idle' && !this.pendingItem) {
+      const next = this.startAutoForgeCycle(currencies);
+      return {
+        processedItem: false,
+        startedNextForge: next.success,
+        stoppedReason: next.success
+          ? null
+          : this.autoForge.getState().stopReason,
+      };
+    }
+
+    return { processedItem: false };
   }
 
   // Advances the 2.0-second forging timer and generates the item upon completion
@@ -236,6 +392,7 @@ export class ForgeSystem {
               : undefined,
           }
         : null,
+      autoForge: this.autoForge.exportState(),
     };
   }
 
@@ -246,6 +403,7 @@ export class ForgeSystem {
 
     if (!saved || typeof saved !== 'object') {
       this.totalForged = 0;
+      this.autoForge.loadState(undefined);
       return;
     }
 
@@ -263,5 +421,7 @@ export class ForgeSystem {
         this.elapsedSec = FORGE_CONFIG.durationSec;
       }
     }
+
+    this.autoForge.loadState(saved.autoForge);
   }
 }

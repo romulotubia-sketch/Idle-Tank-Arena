@@ -11,6 +11,8 @@ export function createPlayerTank(centerX: number, centerY: number): PlayerTankSt
     idlePhase: 0,
     hitFlashTimer: 0,
     recoilOffset: 0,
+    bodyRecoilX: 0,
+    bodyRecoilY: 0,
     isMoving: false,
     stats: { ...INITIAL_TANK_STATS },
   };

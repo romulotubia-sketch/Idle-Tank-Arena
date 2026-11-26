@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../../balanceConfig';
 import { EnemyInstance, SkillDefinition, Vector2 } from '../../types';
 import {
   applySkillDamageBonus,
@@ -7,22 +8,7 @@ import {
   SkillExecutionContext,
 } from './BaseSkill';
 
-interface TeslaLevelSpec {
-  damage: number;
-  interval: number;
-  range: number;
-  chainTargets: number;
-  chainRadius: number;
-  chainRetention: number;
-}
-
-const TESLA_LEVELS: readonly TeslaLevelSpec[] = [
-  { damage: 24, interval: 1.9, range: 320, chainTargets: 2, chainRadius: 120, chainRetention: 0.78 },  // Lv1
-  { damage: 32, interval: 1.75, range: 335, chainTargets: 3, chainRadius: 135, chainRetention: 0.83 }, // Lv2
-  { damage: 42, interval: 1.6, range: 350, chainTargets: 4, chainRadius: 150, chainRetention: 0.88 },  // Lv3
-  { damage: 54, interval: 1.4, range: 370, chainTargets: 5, chainRadius: 165, chainRetention: 0.92 },  // Lv4
-  { damage: 70, interval: 1.25, range: 390, chainTargets: 6, chainRadius: 185, chainRetention: 0.96 }, // Lv5
-];
+const TESLA_LEVELS = GAME_BALANCE.skills.tesla;
 
 export class TeslaSkill implements CombatSkillModule {
   readonly definition: SkillDefinition = {

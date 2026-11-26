@@ -12,7 +12,6 @@ import {
   Sparkles,
   Trash2,
   Unlock,
-  X,
 } from 'lucide-react';
 import { FORGE_CONFIG } from '../game/constants';
 import {
@@ -38,6 +37,7 @@ import {
   EquipmentStatsMap,
   TankStats,
 } from '../game/types';
+import { BattlefieldPanel } from './components/BattlefieldPanel';
 import { EquipmentIcon } from './EquipmentIcon';
 
 export interface EquipmentFeedbackInfo {
@@ -560,26 +560,27 @@ export function EquipmentModal({
     );
   };
 
+  const combinedFeedback = localNotice
+    ? { text: localNotice, tone: 'error' as const }
+    : feedback;
+
   return (
-    <section
-      role="dialog"
-      aria-modal="true"
-      aria-label="Tank Equipment"
-      className="absolute inset-2 sm:inset-3 z-20 flex flex-col bg-[#131920]/98 border border-[#334155] rounded-xl shadow-2xl overflow-hidden"
-    >
-      {/* Top Bar */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 bg-[#1A222C] shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <Package className="w-4 h-4 text-sky-400 shrink-0" />
-          <h2 className="text-xs sm:text-sm font-bold text-white tracking-tight truncate">
-            Tank Equipment
-          </h2>
-          <span className="font-mono-tabular text-[11px] font-semibold px-2 py-0.5 rounded bg-[#10151B] border border-white/10 text-slate-300 shrink-0">
-            Loadout {equippedCount}/6
+    <BattlefieldPanel
+      title="Tank Equipment"
+      icon={<Package className="w-4 h-4 text-sky-400" />}
+      variant="wide"
+      ariaLabel="Tank Equipment"
+      closeLabel="Close Tank Equipment"
+      onClose={onClose}
+      feedback={combinedFeedback}
+      headerMeta={
+        <>
+          <span className="font-mono-tabular text-[11px] font-semibold px-1.5 py-0.5 rounded bg-[#10151B] border border-white/10 text-slate-300 shrink-0">
+            {equippedCount}/6
           </span>
           <span
             title="Unequipped Storage Capacity"
-            className={`font-mono-tabular text-[11px] font-bold px-2 py-0.5 rounded border shrink-0 ${
+            className={`font-mono-tabular text-[11px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
               isInventoryFull
                 ? 'bg-rose-950/80 border-rose-500/60 text-rose-200'
                 : unequippedCount >= inventoryCapacity - 3
@@ -589,77 +590,51 @@ export function EquipmentModal({
           >
             Bag {unequippedCount}/{inventoryCapacity}
           </span>
-        </div>
+        </>
+      }
+      headerActions={
+        <>
+          <div className="hidden xl:flex items-center gap-3 text-[11px] font-mono-tabular text-slate-300 mr-1">
+            <span>
+              ATK <strong className="text-amber-300">{tankStats.attackPower}</strong>
+            </span>
+            <span>
+              SPD{' '}
+              <strong className="text-sky-300">
+                {tankStats.fireRate.toFixed(2)}/s
+              </strong>
+            </span>
+            <span>
+              CRIT{' '}
+              <strong className="text-yellow-300">
+                {tankStats.critChance.toFixed(1)}%
+              </strong>
+            </span>
+            <span>
+              ARM <strong className="text-slate-100">{tankStats.armor}</strong>
+            </span>
+            <span>
+              MOVE{' '}
+              <strong className="text-emerald-300">
+                {Math.round(tankStats.moveSpeed)}
+              </strong>
+            </span>
+          </div>
 
-        {/* Live Tank Stat Readout on Wide Screens */}
-        <div className="hidden xl:flex items-center gap-3 text-[11px] font-mono-tabular text-slate-300">
-          <span>
-            ATK <strong className="text-amber-300">{tankStats.attackPower}</strong>
-          </span>
-          <span>
-            SPD{' '}
-            <strong className="text-sky-300">
-              {tankStats.fireRate.toFixed(2)}/s
-            </strong>
-          </span>
-          <span>
-            CRIT{' '}
-            <strong className="text-yellow-300">
-              {tankStats.critChance.toFixed(1)}%
-            </strong>
-          </span>
-          <span>
-            ARM <strong className="text-slate-100">{tankStats.armor}</strong>
-          </span>
-          <span>
-            MOVE{' '}
-            <strong className="text-emerald-300">
-              {Math.round(tankStats.moveSpeed)}
-            </strong>
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={(e) => {
               e.currentTarget.blur();
               onOpenForge();
             }}
-            className="h-8 px-2.5 rounded-lg bg-[#D97706] hover:bg-[#F59E0B] border border-amber-300/60 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors active:scale-95"
+            className="h-8 sm:h-9 px-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 border border-amber-300/60 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors active:scale-95 cursor-pointer"
           >
             <Hammer className="w-3.5 h-3.5 shrink-0" />
             <span>Forge</span>
           </button>
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.currentTarget.blur();
-              onClose();
-            }}
-            aria-label="Close Tank Equipment"
-            className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#222B37] hover:bg-[#2E3A4A] border border-white/15 text-slate-200 hover:text-white transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Transient Feedback or Capacity Warning Banner */}
-      {(feedback || localNotice) && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`px-3 py-1.5 text-xs font-semibold border-b shrink-0 ${
-            localNotice || feedback?.tone === 'error'
-              ? 'bg-rose-950/75 border-rose-500/40 text-rose-200'
-              : 'bg-emerald-950/75 border-emerald-500/40 text-emerald-200'
-          }`}
-        >
-          {localNotice ?? feedback?.text}
-        </div>
-      )}
+        </>
+      }
+    >
 
       {!feedback && !localNotice && isInventoryFull && (
         <div className="px-3 py-1.5 text-xs font-semibold border-b bg-amber-950/60 border-amber-500/40 text-amber-200 flex items-center gap-2 shrink-0">
@@ -1170,7 +1145,7 @@ export function EquipmentModal({
         <div
           className={`${
             mobileTab === 'details' ? 'flex' : 'hidden'
-          } lg:flex lg:col-span-4 flex-col min-h-0 p-3 bg-[#11161C] justify-between gap-2.5 overflow-y-auto panel-scroll`}
+          } lg:flex lg:col-span-4 flex-col min-h-0 bg-[#11161C] overflow-hidden`}
         >
           {!selectedItem ? (
             <div className="flex-1 flex items-center justify-center text-center text-xs text-slate-500 p-4">
@@ -1179,7 +1154,7 @@ export function EquipmentModal({
             </div>
           ) : (
             <>
-              <div className="flex flex-col gap-2.5">
+              <div className="flex-1 min-h-0 overflow-y-auto panel-scroll p-2.5 sm:p-3 flex flex-col gap-2">
                 {/* Item Header Card */}
                 {(() => {
                   const rarityMeta = EQUIPMENT_RARITY_CONFIG[selectedItem.rarity];
@@ -1429,8 +1404,8 @@ export function EquipmentModal({
                 )}
               </div>
 
-              {/* Action Footer */}
-              <div className="pt-1 flex flex-col gap-1.5 shrink-0">
+              {/* Pinned Action Footer */}
+              <div className="p-2.5 sm:p-3 border-t border-white/10 bg-[#121820] flex flex-col gap-1.5 shrink-0">
                 {isSelectedCurrentlyEquipped ? (
                   <button
                     type="button"
@@ -1503,7 +1478,7 @@ export function EquipmentModal({
           )}
         </div>
       </div>
-    </section>
+    </BattlefieldPanel>
   );
 }
 

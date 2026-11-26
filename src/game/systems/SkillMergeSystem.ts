@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../balanceConfig';
 import { MAX_SKILL_LEVEL } from '../constants';
 import { MergeRule, SkillId, SkillSlot } from '../types';
 import { SkillCollectionSystem } from './SkillCollectionSystem';
@@ -40,7 +41,8 @@ export class SkillMergeSystem {
   };
 
   private lastMergeTimestampMs = 0;
-  private readonly minMergeIntervalMs = 220;
+  private readonly minMergeIntervalMs =
+    GAME_BALANCE.skillMerge.minMergeIntervalMs;
 
   getRule(): MergeRule {
     return { ...this.rule };

@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../../balanceConfig';
 import { SkillDefinition } from '../../types';
 import {
   applySkillDamageBonus,
@@ -7,22 +8,7 @@ import {
   SkillExecutionContext,
 } from './BaseSkill';
 
-interface RocketLevelSpec {
-  damage: number;
-  aoeRadius: number;
-  interval: number;
-  range: number;
-  rockets: number;
-  speed: number;
-}
-
-const ROCKET_LEVELS: readonly RocketLevelSpec[] = [
-  { damage: 26, aoeRadius: 56, interval: 3.0, range: 350, rockets: 2, speed: 410 }, // Lv1
-  { damage: 34, aoeRadius: 64, interval: 2.75, range: 365, rockets: 2, speed: 430 }, // Lv2
-  { damage: 44, aoeRadius: 74, interval: 2.55, range: 380, rockets: 3, speed: 450 }, // Lv3: 3-rocket salvo
-  { damage: 56, aoeRadius: 84, interval: 2.3, range: 395, rockets: 4, speed: 470 }, // Lv4
-  { damage: 72, aoeRadius: 96, interval: 2.05, range: 415, rockets: 5, speed: 500 }, // Lv5
-];
+const ROCKET_LEVELS = GAME_BALANCE.skills.rocket_barrage;
 
 export class RocketBarrageSkill implements CombatSkillModule {
   readonly definition: SkillDefinition = {

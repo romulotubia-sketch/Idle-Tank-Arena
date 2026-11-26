@@ -7,6 +7,10 @@ export class Camera {
   private viewportWidth = 1;
   private viewportHeight = 1;
   private scale = 1;
+  private shakeIntensity = 0;
+  private shakeX = 0;
+  private shakeY = 0;
+  private shakePhase = 0;
 
   constructor(bounds: ArenaBounds) {
     this.logicalWidth = bounds.width;
@@ -15,6 +19,30 @@ export class Camera {
       x: bounds.width * 0.5,
       y: bounds.height * 0.5,
     };
+  }
+
+  addKick(amount: number, reducedMotion = false): void {
+    if (reducedMotion || amount <= 0) return;
+    this.shakeIntensity = Math.min(3.8, Math.max(this.shakeIntensity, amount));
+  }
+
+  update(dt: number, reducedMotion = false): void {
+    if (reducedMotion || this.shakeIntensity <= 0.02) {
+      this.shakeIntensity = 0;
+      this.shakeX = 0;
+      this.shakeY = 0;
+      return;
+    }
+    this.shakePhase += dt * 58;
+    this.shakeX = Math.cos(this.shakePhase) * this.shakeIntensity;
+    this.shakeY = Math.sin(this.shakePhase * 1.37) * this.shakeIntensity;
+    this.shakeIntensity *= Math.exp(-22 * dt);
+  }
+
+  resetEffects(): void {
+    this.shakeIntensity = 0;
+    this.shakeX = 0;
+    this.shakeY = 0;
   }
 
   updateViewport(width: number, height: number): void {
@@ -35,7 +63,10 @@ export class Camera {
   }
 
   applyTransform(ctx: CanvasRenderingContext2D): void {
-    ctx.translate(this.viewportWidth * 0.5, this.viewportHeight * 0.5);
+    ctx.translate(
+      this.viewportWidth * 0.5 + this.shakeX,
+      this.viewportHeight * 0.5 + this.shakeY
+    );
     ctx.scale(this.scale, this.scale);
     ctx.translate(-this.center.x, -this.center.y);
   }

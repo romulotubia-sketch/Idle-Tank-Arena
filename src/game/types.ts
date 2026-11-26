@@ -47,27 +47,49 @@ export interface PlayerTankState {
   idlePhase: number;
   hitFlashTimer: number;
   recoilOffset: number;
+  bodyRecoilX: number;
+  bodyRecoilY: number;
   isMoving: boolean;
   stats: TankStats;
 }
 
-export type EnemyKind = 'scout_buggy' | 'heavy_crawler' | 'siege_boss';
+export type EnemyKind =
+  | 'scout'
+  | 'assault_tank'
+  | 'heavy_tank'
+  | 'artillery'
+  | 'runner'
+  | 'siege_boss';
+
+export type EnemyBehaviorType =
+  | 'skirmisher'
+  | 'standard'
+  | 'juggernaut'
+  | 'artillery_ranged'
+  | 'rusher'
+  | 'boss';
 
 export interface EnemyDefinition {
   id: EnemyKind;
   name: string;
+  behavior: EnemyBehaviorType;
   baseHp: number;
   speed: number;
+  maxSpeed: number;
   attackDamage: number;
   attackIntervalSec: number;
   attackRange: number;
+  preferredMinRange?: number;
   radius: number;
+  rewardMultiplier: number;
   rewardGold: number;
+  unlockWave: number;
 }
 
 export interface EnemyInstance {
   uid: number;
   definitionId: EnemyKind;
+  behavior: EnemyBehaviorType;
   isBoss: boolean;
   position: Vector2;
   angle: number;
@@ -77,15 +99,27 @@ export interface EnemyInstance {
   attackDamage: number;
   attackIntervalSec: number;
   attackRange: number;
+  preferredMinRange: number;
   attackCooldown: number;
   radius: number;
   rewardGold: number;
   rewardClaimed: boolean;
   hitFlashTimer: number;
+  hitReactionTimer: number;
+  hitReactionX: number;
+  hitReactionY: number;
   isDying: boolean;
   deathTimer: number;
   deathDuration: number;
-  // Boss distinct telegraphed siege attack state
+  // Smooth hysteresis so enemies don't jitter at range edge
+  inAttackHold?: boolean;
+    // Boss distinct encounter & attack pattern state
+  introTimer?: number;
+  introDuration?: number;
+  burstCooldown?: number;
+  burstChargeTimer?: number;
+  burstShotsRemaining?: number;
+  burstShotTimer?: number;
   specialCooldown?: number;
   telegraphTimer?: number;
   telegraphDuration?: number;
@@ -100,13 +134,17 @@ export type ProjectileKind =
   | 'mg_bullet'
   | 'rocket'
   | 'mortar_shell'
-  | 'rail_slug';
+  | 'rail_slug'
+  | 'enemy_artillery_shell'
+  | 'enemy_boss_shell';
 
 export interface ProjectileInstance {
   uid: number;
   kind: ProjectileKind;
   x: number;
   y: number;
+  prevX: number;
+  prevY: number;
   vx: number;
   vy: number;
   angle: number;
@@ -119,6 +157,8 @@ export interface ProjectileInstance {
   hitEnemyUids: number[];
   visualTier?: number;
   isCrit?: boolean;
+  isEnemyProjectile?: boolean;
+  smokeCooldown?: number;
   // Used by arcing mortar shells
   startX?: number;
   startY?: number;
@@ -149,7 +189,18 @@ export type VisualEffectKind =
   | 'rail_beam'
   | 'lightning_arc'
   | 'flame_cone'
+  | 'smoke'
+  | 'debris'
+  | 'hit_ring'
   | 'damage_text';
+
+export type ExplosionStyle =
+  | 'cannon'
+  | 'rocket'
+  | 'mortar'
+  | 'mine'
+  | 'enemy'
+  | 'boss';
 
 export interface VisualEffect {
   kind: VisualEffectKind;
@@ -164,6 +215,9 @@ export interface VisualEffect {
   life: number;
   maxLife: number;
   color: string;
+  secondaryColor?: string;
+  style?: ExplosionStyle;
+  seed?: number;
   value?: number;
   isCrit?: boolean;
   points?: Vector2[];
@@ -402,6 +456,76 @@ export interface SavedEquipmentState {
 
 export type ForgeStatus = 'idle' | 'forging' | 'result_ready';
 
+export interface AutoForgeStatRequirement {
+  enabled: boolean;
+  minValue: number;
+}
+
+export type AutoForgeStatRequirementsMap = Record<
+  EquipmentStatKey,
+  AutoForgeStatRequirement
+>;
+
+export interface AutoForgeSettings {
+  minRarity: EquipmentRarity;
+  enabledSlots: Record<EquipmentSlotType, boolean>;
+  statFilters: AutoForgeStatRequirementsMap;
+  requireSpecialEffect: boolean;
+  spendingLimitEnabled: boolean;
+  maxCoinSpend: number;
+  minCoinReserve: number;
+  autoResumeOnLoad: boolean;
+}
+
+export interface AutoForgeSessionStats {
+  coinsSpent: number;
+  itemsForged: number;
+  itemsKept: number;
+  itemsDismantled: number;
+  dismantleCoinsEarned: number;
+}
+
+export interface AutoForgeLifetimeStats {
+  coinsSpent: number;
+  itemsForged: number;
+  itemsKept: number;
+  itemsDismantled: number;
+}
+
+export type AutoForgeStopReason =
+  | 'manual'
+  | 'insufficient_coins'
+  | 'spending_limit_reached'
+  | 'coin_reserve_reached'
+  | 'inventory_full'
+  | null;
+
+export interface AutoForgeEvent {
+  id: number;
+  kind: 'kept' | 'dismantled' | 'stopped';
+  itemName?: string;
+  itemRarity?: EquipmentRarity;
+  itemSlot?: EquipmentSlotType;
+  dismantleCoins?: number;
+  stopReason?: AutoForgeStopReason;
+  message: string;
+}
+
+export interface AutoForgeState {
+  enabled: boolean;
+  settings: AutoForgeSettings;
+  session: AutoForgeSessionStats;
+  lifetime: AutoForgeLifetimeStats;
+  stopReason: AutoForgeStopReason;
+  lastEvent: AutoForgeEvent | null;
+}
+
+export interface SavedAutoForgeState {
+  enabled: boolean;
+  settings: AutoForgeSettings;
+  lifetime: AutoForgeLifetimeStats;
+}
+
 export interface ForgeState {
   status: ForgeStatus;
   costCoins: number;
@@ -410,11 +534,13 @@ export interface ForgeState {
   progress: number;
   pendingItem: EquipmentItem | null;
   totalForged: number;
+  autoForge: AutoForgeState;
 }
 
 export interface SavedForgeState {
   totalForged: number;
   pendingItem: EquipmentItem | null;
+  autoForge?: SavedAutoForgeState;
 }
 
 export interface ForgeRecipeSlot {
@@ -432,6 +558,7 @@ export interface InventorySlot {
 export interface SavePayload {
   version: number;
   savedAt: number;
+  lastOfflineRewardAt?: number;
   wave: WaveState;
   currencies: CurrencyBalances;
   tankStats: TankStats;
@@ -443,18 +570,46 @@ export interface SavePayload {
   showRangeRing: boolean;
 }
 
+export interface OfflineRewardSummary {
+  elapsedSeconds: number;
+  effectiveSeconds: number;
+  wasCapped: boolean;
+  maxDurationSeconds: number;
+  coinsEarned: number;
+  coinsPerMinuteRate: number;
+  efficiencyPct: number;
+  waveUsed: number;
+  sourceTimestamp: number;
+  calculatedAt: number;
+  claimed: boolean;
+}
+
+export interface SaveStatusNotice {
+  kind: 'recovered_from_backup' | 'corrupt_unrecoverable';
+  message: string;
+}
+
+export interface BattleRecoveryState {
+  active: boolean;
+  wave: number;
+  remainingSec: number;
+  totalSec: number;
+}
+
 export interface WaveHudEvent {
   id: number;
   kind: 'wave_clear' | 'boss_spawn';
   wave: number;
   isBossWave: boolean;
   rewardGold: number;
+  bossName?: string;
 }
 
 export interface GameHudSnapshot {
   phase: GamePhase;
   wave: WaveState;
   boss: BossHudState | null;
+  recovery: BattleRecoveryState | null;
   waveEvent: WaveHudEvent | null;
   currencies: CurrencyBalances;
   tank: PlayerTankState;
@@ -475,4 +630,6 @@ export interface GameHudSnapshot {
   showRangeRing: boolean;
   summonCost: number;
   hasVacantSkillSlot: boolean;
+  offlineReward: OfflineRewardSummary | null;
+  saveNotice: SaveStatusNotice | null;
 }

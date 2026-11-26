@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../../balanceConfig';
 import { SkillDefinition } from '../../types';
 import { SkillCollectionComputedBonuses } from '../SkillCollectionSystem';
 import {
@@ -8,22 +9,7 @@ import {
   SkillExecutionContext,
 } from './BaseSkill';
 
-interface MachineGunLevelSpec {
-  damage: number;
-  interval: number;
-  range: number;
-  speed: number;
-  bulletsPerBurst: number;
-  pierceCount: number;
-}
-
-const MG_LEVELS: readonly MachineGunLevelSpec[] = [
-  { damage: 8, interval: 0.3, range: 290, speed: 690, bulletsPerBurst: 1, pierceCount: 1 },   // Lv1
-  { damage: 10, interval: 0.25, range: 305, speed: 720, bulletsPerBurst: 1, pierceCount: 1 }, // Lv2
-  { damage: 12, interval: 0.22, range: 320, speed: 745, bulletsPerBurst: 2, pierceCount: 1 }, // Lv3: Twin-linked
-  { damage: 15, interval: 0.19, range: 338, speed: 775, bulletsPerBurst: 2, pierceCount: 2 }, // Lv4: AP rounds
-  { damage: 20, interval: 0.15, range: 360, speed: 810, bulletsPerBurst: 3, pierceCount: 2 }, // Lv5: Tri-barrel rotary AP
-];
+const MG_LEVELS = GAME_BALANCE.skills.machine_gun;
 
 export class MachineGunSkill implements CombatSkillModule {
   readonly definition: SkillDefinition = {

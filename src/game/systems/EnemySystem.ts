@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../balanceConfig';
 import {
   BOSS_CONFIG,
   ECONOMY_CONFIG,
@@ -6,6 +7,7 @@ import {
 } from '../constants';
 import {
   ArenaBounds,
+  EnemyBehaviorType,
   EnemyDefinition,
   EnemyInstance,
   EnemyKind,
@@ -16,8 +18,12 @@ import { WavePlan } from './WaveSystem';
 export interface EnemyAttackEvent {
   enemyX: number;
   enemyY: number;
+  angle: number;
   damage: number;
+  kind: EnemyKind;
+  behavior: EnemyBehaviorType;
   isBoss?: boolean;
+  attackMode?: 'standard' | 'boss_heavy' | 'boss_burst';
 }
 
 export interface BossSiegeStrikeEvent {
@@ -42,41 +48,43 @@ export interface EnemyUpdateCallbacks {
   onBossSiegeStrike: (event: BossSiegeStrikeEvent) => void;
   onEnemySpawned: () => void;
   onEnemyDestroyed: (event: EnemyDestroyedEvent) => void;
+  onBossSpawned?: (boss: EnemyInstance) => void;
 }
 
+const ARCHETYPE_KEYS = [
+  'scout',
+  'assault_tank',
+  'heavy_tank',
+  'runner',
+  'artillery',
+] as const;
+
 const DEFAULT_ENEMY_DEFINITIONS: EnemyDefinition[] = [
-  {
-    id: 'scout_buggy',
-    name: 'Recon Raider',
-    baseHp: 48,
-    speed: 62,
-    attackDamage: 8,
-    attackIntervalSec: 1.15,
-    attackRange: 108,
-    radius: 14,
-    rewardGold: ECONOMY_CONFIG.normalEnemyBaseCoins,
-  },
-  {
-    id: 'heavy_crawler',
-    name: 'Assault Crawler',
-    baseHp: 96,
-    speed: 38,
-    attackDamage: 14,
-    attackIntervalSec: 1.55,
-    attackRange: 128,
-    radius: 18,
-    rewardGold: ECONOMY_CONFIG.normalEnemyBaseCoins,
-  },
+  ...ARCHETYPE_KEYS.map((key) => {
+    const spec = GAME_BALANCE.enemyDefinitions[key];
+    return {
+      ...spec,
+      rewardGold: Math.max(
+        1,
+        Math.round(ECONOMY_CONFIG.normalEnemyBaseCoins * spec.rewardMultiplier)
+      ),
+    };
+  }),
   {
     id: BOSS_CONFIG.kind,
     name: BOSS_CONFIG.name,
+    behavior: BOSS_CONFIG.behavior,
     baseHp: BOSS_CONFIG.baseHp,
     speed: BOSS_CONFIG.speed,
+    maxSpeed: BOSS_CONFIG.maxSpeed,
     attackDamage: BOSS_CONFIG.attackDamage,
     attackIntervalSec: BOSS_CONFIG.attackIntervalSec,
     attackRange: BOSS_CONFIG.attackRange,
+    preferredMinRange: BOSS_CONFIG.preferredMinRange,
     radius: BOSS_CONFIG.radius,
+    rewardMultiplier: BOSS_CONFIG.rewardMultiplier,
     rewardGold: BOSS_CONFIG.rewardGold,
+    unlockWave: BOSS_CONFIG.unlockWave,
   },
 ];
 
@@ -85,7 +93,6 @@ export class EnemySystem {
   private readonly activeEnemies: EnemyInstance[] = [];
   private nextUid = 1;
   private spawnTimer: number = SPAWN_CONFIG.initialDelaySec;
-  private spawnCounter = 0;
 
   constructor() {
     for (let i = 0; i < DEFAULT_ENEMY_DEFINITIONS.length; i++) {
@@ -99,6 +106,10 @@ export class EnemySystem {
 
   getDefinition(kind: EnemyKind): EnemyDefinition | undefined {
     return this.definitions.get(kind);
+  }
+
+  getAllDefinitions(): readonly EnemyDefinition[] {
+    return Array.from(this.definitions.values());
   }
 
   getActiveEnemies(): readonly EnemyInstance[] {
@@ -127,31 +138,68 @@ export class EnemySystem {
 
   resetSpawnTimer(delaySec: number = SPAWN_CONFIG.initialDelaySec): void {
     this.spawnTimer = delaySec;
-    this.spawnCounter = 0;
   }
 
   clear(): void {
     this.activeEnemies.length = 0;
     this.spawnTimer = SPAWN_CONFIG.initialDelaySec;
-    this.spawnCounter = 0;
+  }
+
+  selectEnemyKindForWave(waveNumber: number, rngValue: number = Math.random()): EnemyKind {
+    const profiles = SPAWN_CONFIG.spawnProfiles;
+    let selected: (typeof SPAWN_CONFIG.spawnProfiles)[number] = profiles[0];
+    for (let i = 0; i < profiles.length; i++) {
+      if (waveNumber >= profiles[i].minWave) {
+        selected = profiles[i];
+      }
+    }
+
+    const weights = selected.weights;
+    let totalWeight = 0;
+    for (let i = 0; i < ARCHETYPE_KEYS.length; i++) {
+      totalWeight += weights[ARCHETYPE_KEYS[i]] ?? 0;
+    }
+
+    if (totalWeight <= 0) return 'assault_tank';
+
+    let roll = Math.max(0, Math.min(0.999999, rngValue)) * totalWeight;
+    for (let i = 0; i < ARCHETYPE_KEYS.length; i++) {
+      const key = ARCHETYPE_KEYS[i];
+      const w = weights[key] ?? 0;
+      if (w <= 0) continue;
+      if (roll < w) return key;
+      roll -= w;
+    }
+
+    return 'assault_tank';
   }
 
   applyDamage(
     enemy: EnemyInstance,
     damage: number,
-    onDestroyed?: (event: EnemyDestroyedEvent) => void
+    onDestroyed?: (event: EnemyDestroyedEvent) => void,
+    hitDirX = 0,
+    hitDirY = 0
   ): boolean {
     if (enemy.isDying || enemy.hp <= 0) return false;
 
     const cleanDamage = Math.max(1, Math.round(damage));
     enemy.hp = Math.max(0, enemy.hp - cleanDamage);
-    enemy.hitFlashTimer = 0.12;
+    enemy.hitFlashTimer = 0.085;
+    enemy.hitReactionTimer = 0.095;
+    const kickScale = enemy.isBoss ? 1.1 : enemy.behavior === 'juggernaut' ? 1.5 : 2.6;
+    if (hitDirX !== 0 || hitDirY !== 0) {
+      enemy.hitReactionX = hitDirX * kickScale;
+      enemy.hitReactionY = hitDirY * kickScale;
+    } else {
+      enemy.hitReactionX = -Math.cos(enemy.angle) * (kickScale * 0.75);
+      enemy.hitReactionY = -Math.sin(enemy.angle) * (kickScale * 0.75);
+    }
 
     if (enemy.hp <= 0) {
       enemy.isDying = true;
-      enemy.deathDuration = enemy.isBoss ? 0.55 : 0.34;
+      enemy.deathDuration = enemy.isBoss ? 0.58 : 0.34;
       enemy.deathTimer = enemy.deathDuration;
-      // Immediately cancel any active boss telegraph so boss cannot attack after defeat
       enemy.telegraphTimer = 0;
 
       if (!enemy.rewardClaimed) {
@@ -188,13 +236,12 @@ export class EnemySystem {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
         if (this.countAliveEnemies() < SPAWN_CONFIG.maxActiveEnemies) {
-          const spawned = this.spawnWaveEnemy(bounds, playerPos, wavePlan);
+          const spawned = this.spawnWaveEnemy(bounds, playerPos, wavePlan, callbacks);
           if (spawned) {
             callbacks.onEnemySpawned();
           }
           this.spawnTimer = wavePlan.spawnIntervalSec;
         } else {
-          // Hold timer ready so spawning resumes immediately when an enemy is defeated
           this.spawnTimer = 0;
         }
       }
@@ -210,6 +257,15 @@ export class EnemySystem {
       if (enemy.hitFlashTimer > 0) {
         enemy.hitFlashTimer = Math.max(0, enemy.hitFlashTimer - dt);
       }
+      if (enemy.hitReactionTimer > 0) {
+        enemy.hitReactionTimer = Math.max(0, enemy.hitReactionTimer - dt);
+        const decay = Math.exp(-24 * dt);
+        enemy.hitReactionX *= decay;
+        enemy.hitReactionY *= decay;
+      } else if (enemy.hitReactionX !== 0 || enemy.hitReactionY !== 0) {
+        enemy.hitReactionX = 0;
+        enemy.hitReactionY = 0;
+      }
 
       if (enemy.isDying) {
         enemy.deathTimer -= dt;
@@ -221,13 +277,23 @@ export class EnemySystem {
 
       const dx = playerPos.x - enemy.position.x;
       const dy = playerPos.y - enemy.position.y;
-      const distSq = dx * dx + dy * dy;
-      const dist = Math.sqrt(distSq) || 1;
+      const dist = Math.hypot(dx, dy) || 1;
+      const dirX = dx / dist;
+      const dirY = dy / dist;
 
       enemy.angle = Math.atan2(dy, dx);
 
-      // Handle Boss telegraphed Siege Strike behavior
+      // Handle Boss encounter intro + multi-pattern attacks (Siege Strike, Burst Salvo, Heavy Shell)
       if (enemy.isBoss) {
+        if (enemy.introTimer && enemy.introTimer > 0) {
+          enemy.introTimer = Math.max(0, enemy.introTimer - dt);
+          enemy.position.x += dirX * enemy.speed * 0.45 * dt;
+          enemy.position.y += dirY * enemy.speed * 0.45 * dt;
+          this.clampEnemyToArena(enemy, bounds);
+          this.activeEnemies[writeIndex++] = enemy;
+          continue;
+        }
+
         if (enemy.telegraphTimer && enemy.telegraphTimer > 0) {
           enemy.telegraphTimer -= dt;
           if (enemy.telegraphTimer <= 0) {
@@ -253,42 +319,82 @@ export class EnemySystem {
           continue;
         }
 
+        if (enemy.burstChargeTimer && enemy.burstChargeTimer > 0) {
+          enemy.burstChargeTimer -= dt;
+          if (enemy.burstChargeTimer <= 0) {
+            enemy.burstChargeTimer = 0;
+            enemy.burstShotsRemaining = BOSS_CONFIG.burstShotCount;
+            enemy.burstShotTimer = 0;
+          }
+          this.activeEnemies[writeIndex++] = enemy;
+          continue;
+        }
+
+        if (enemy.burstShotsRemaining && enemy.burstShotsRemaining > 0) {
+          enemy.burstShotTimer = (enemy.burstShotTimer ?? 0) - dt;
+          if (enemy.burstShotTimer <= 0) {
+            const shotIdx = BOSS_CONFIG.burstShotCount - enemy.burstShotsRemaining;
+            const spreadOffset =
+              (shotIdx - Math.floor(BOSS_CONFIG.burstShotCount / 2)) *
+              BOSS_CONFIG.burstSpreadRad;
+            const shotAngle = enemy.angle + spreadOffset;
+            const muzzleDist = enemy.radius + 16;
+            callbacks.onAttackPlayer({
+              enemyX: enemy.position.x + Math.cos(shotAngle) * muzzleDist,
+              enemyY: enemy.position.y + Math.sin(shotAngle) * muzzleDist,
+              angle: shotAngle,
+              damage: Math.max(
+                1,
+                Math.round(enemy.attackDamage * BOSS_CONFIG.burstDamageMultiplier)
+              ),
+              kind: enemy.definitionId,
+              behavior: enemy.behavior,
+              isBoss: true,
+              attackMode: 'boss_burst',
+            });
+            enemy.burstShotsRemaining -= 1;
+            enemy.burstShotTimer = BOSS_CONFIG.burstShotIntervalSec;
+          }
+          this.activeEnemies[writeIndex++] = enemy;
+          continue;
+        }
+
         if (enemy.specialCooldown !== undefined) {
           enemy.specialCooldown -= dt;
-          if (
-            enemy.specialCooldown <= 0 &&
-            dist <= BOSS_CONFIG.specialTriggerRange
-          ) {
-            enemy.specialCooldown = BOSS_CONFIG.specialIntervalSec;
-            enemy.telegraphDuration = BOSS_CONFIG.specialTelegraphSec;
-            enemy.telegraphTimer = BOSS_CONFIG.specialTelegraphSec;
-            enemy.telegraphX = playerPos.x;
-            enemy.telegraphY = playerPos.y;
-            enemy.telegraphRadius = BOSS_CONFIG.specialRadius;
-            this.activeEnemies[writeIndex++] = enemy;
-            continue;
-          }
+        }
+        if (enemy.burstCooldown !== undefined) {
+          enemy.burstCooldown -= dt;
+        }
+
+        if (
+          enemy.specialCooldown !== undefined &&
+          enemy.specialCooldown <= 0 &&
+          dist <= BOSS_CONFIG.specialTriggerRange
+        ) {
+          enemy.specialCooldown = BOSS_CONFIG.specialIntervalSec;
+          enemy.telegraphDuration = BOSS_CONFIG.specialTelegraphSec;
+          enemy.telegraphTimer = BOSS_CONFIG.specialTelegraphSec;
+          enemy.telegraphX = playerPos.x;
+          enemy.telegraphY = playerPos.y;
+          enemy.telegraphRadius = BOSS_CONFIG.specialRadius;
+          this.activeEnemies[writeIndex++] = enemy;
+          continue;
+        }
+
+        if (
+          enemy.burstCooldown !== undefined &&
+          enemy.burstCooldown <= 0 &&
+          dist <= enemy.attackRange + 35
+        ) {
+          enemy.burstCooldown = BOSS_CONFIG.burstCooldownSec;
+          enemy.burstChargeTimer = BOSS_CONFIG.burstChargeSec;
+          this.activeEnemies[writeIndex++] = enemy;
+          continue;
         }
       }
 
-      if (dist > enemy.attackRange) {
-        // Move toward player tank
-        const step = enemy.speed * dt;
-        enemy.position.x += (dx / dist) * step;
-        enemy.position.y += (dy / dist) * step;
-      } else {
-        // Inside attack range: hold position and attack on interval
-        enemy.attackCooldown -= dt;
-        if (enemy.attackCooldown <= 0) {
-          enemy.attackCooldown = enemy.attackIntervalSec;
-          callbacks.onAttackPlayer({
-            enemyX: enemy.position.x + (dx / dist) * enemy.radius,
-            enemyY: enemy.position.y + (dy / dist) * enemy.radius,
-            damage: enemy.attackDamage,
-            isBoss: enemy.isBoss,
-          });
-        }
-      }
+      // Modular archetype movement & attack logic
+      this.stepArchetypeBehavior(dt, enemy, dist, dirX, dirY, bounds, callbacks);
 
       // Lightweight pairwise separation so enemies do not stack on the exact same pixel
       for (let j = i + 1; j < count; j++) {
@@ -300,7 +406,7 @@ export class EnemySystem {
         const oDistSq = ox * ox + oy * oy;
         if (oDistSq > 0.001 && oDistSq < minSep * minSep) {
           const oDist = Math.sqrt(oDistSq);
-          const push = (minSep - oDist) * 0.25;
+          const push = (minSep - oDist) * 0.22;
           const nx = ox / oDist;
           const ny = oy / oDist;
           enemy.position.x += nx * push;
@@ -310,26 +416,228 @@ export class EnemySystem {
         }
       }
 
+      this.clampEnemyToArena(enemy, bounds);
       this.activeEnemies[writeIndex++] = enemy;
     }
 
     this.activeEnemies.length = writeIndex;
   }
 
+  private stepArchetypeBehavior(
+    dt: number,
+    enemy: EnemyInstance,
+    dist: number,
+    dirX: number,
+    dirY: number,
+    bounds: ArenaBounds,
+    callbacks: EnemyUpdateCallbacks
+  ): void {
+    const step = enemy.speed * dt;
+
+    if (enemy.behavior === 'artillery_ranged') {
+      const minComfort = enemy.preferredMinRange;
+      const enterHoldDist = enemy.attackRange - 12;
+      const exitHoldDist = enemy.attackRange + 14;
+
+      if (dist < minComfort - 10) {
+        // Player closed inside preferred range: smoothly back away without getting corner-stuck
+        enemy.inAttackHold = false;
+        const pad = bounds.safeMargin + enemy.radius + 8;
+        let rx = -dirX;
+        let ry = -dirY;
+        const nearLeftRight =
+          (enemy.position.x <= pad && rx < 0) ||
+          (enemy.position.x >= bounds.width - pad && rx > 0);
+        const nearTopBottom =
+          (enemy.position.y <= pad && ry < 0) ||
+          (enemy.position.y >= bounds.height - pad && ry > 0);
+
+        if (nearLeftRight) {
+          rx = 0;
+          ry = enemy.position.y < bounds.height * 0.5 ? 1 : -1;
+        } else if (nearTopBottom) {
+          ry = 0;
+          rx = enemy.position.x < bounds.width * 0.5 ? 1 : -1;
+        }
+
+        const rMag = Math.hypot(rx, ry) || 1;
+        enemy.position.x += (rx / rMag) * step;
+        enemy.position.y += (ry / rMag) * step;
+      } else if (dist > (enemy.inAttackHold ? exitHoldDist : enterHoldDist)) {
+        enemy.inAttackHold = false;
+        enemy.position.x += dirX * step;
+        enemy.position.y += dirY * step;
+      } else {
+        enemy.inAttackHold = true;
+      }
+
+      // Artillery fires when within attackRange and not actively scrambling away inside deadzone
+      if (dist <= enemy.attackRange + 8 && dist >= minComfort * 0.72) {
+        enemy.attackCooldown -= dt;
+        if (enemy.attackCooldown <= 0) {
+          enemy.attackCooldown = enemy.attackIntervalSec;
+          const barrelTip = enemy.radius + 16;
+          callbacks.onAttackPlayer({
+            enemyX: enemy.position.x + dirX * barrelTip,
+            enemyY: enemy.position.y + dirY * barrelTip,
+            angle: enemy.angle,
+            damage: enemy.attackDamage,
+            kind: enemy.definitionId,
+            behavior: enemy.behavior,
+            isBoss: false,
+          });
+        }
+      }
+      return;
+    }
+
+    // Standard, Skirmisher, Juggernaut, Rusher, and Boss approach & hold with range hysteresis
+    const enterRange = enemy.attackRange;
+    const exitRange = enemy.attackRange + 8;
+
+    if (dist > (enemy.inAttackHold ? exitRange : enterRange)) {
+      enemy.inAttackHold = false;
+      enemy.position.x += dirX * step;
+      enemy.position.y += dirY * step;
+    } else {
+      enemy.inAttackHold = true;
+      enemy.attackCooldown -= dt;
+      if (enemy.attackCooldown <= 0) {
+        enemy.attackCooldown = enemy.attackIntervalSec;
+        const muzzleOffset = enemy.isBoss ? enemy.radius + 16 : enemy.radius;
+        callbacks.onAttackPlayer({
+          enemyX: enemy.position.x + dirX * muzzleOffset,
+          enemyY: enemy.position.y + dirY * muzzleOffset,
+          angle: enemy.angle,
+          damage: enemy.attackDamage,
+          kind: enemy.definitionId,
+          behavior: enemy.behavior,
+          isBoss: enemy.isBoss,
+          attackMode: enemy.isBoss ? 'boss_heavy' : 'standard',
+        });
+      }
+    }
+  }
+
+  private clampEnemyToArena(enemy: EnemyInstance, bounds: ArenaBounds): void {
+    const pad = Math.max(12, SPAWN_CONFIG.boundaryPadding * 0.8 + enemy.radius * 0.4);
+    if (enemy.position.x < pad) enemy.position.x = pad;
+    else if (enemy.position.x > bounds.width - pad) {
+      enemy.position.x = bounds.width - pad;
+    }
+    if (enemy.position.y < pad) enemy.position.y = pad;
+    else if (enemy.position.y > bounds.height - pad) {
+      enemy.position.y = bounds.height - pad;
+    }
+  }
+
+  spawnEnemyAt(
+    kind: EnemyKind,
+    x: number,
+    y: number,
+    playerPos: Vector2,
+    wavePlan: WavePlan
+  ): EnemyInstance | null {
+    const def = this.definitions.get(kind);
+    if (!def) return null;
+
+    const angleToPlayer = Math.atan2(playerPos.y - y, playerPos.x - x);
+    const isBoss = kind === BOSS_CONFIG.kind;
+
+    let scaledHp: number;
+    let scaledSpeed: number;
+    if (isBoss) {
+      const bossTier = Math.max(
+        1,
+        Math.floor(wavePlan.wave / WAVE_CONFIG.bossWaveInterval)
+      );
+      const tierScale = 1 + (bossTier - 1) * BOSS_CONFIG.hpScalePerBossTier;
+      scaledHp = Math.round(
+        def.baseHp *
+          tierScale *
+          (1 +
+            Math.max(0, wavePlan.wave - WAVE_CONFIG.bossWaveInterval) *
+              BOSS_CONFIG.hpWaveLinearFactor)
+      );
+      scaledSpeed = Math.min(
+        def.maxSpeed,
+        Math.round(def.speed * wavePlan.speedMultiplier)
+      );
+    } else {
+      scaledHp = Math.round(def.baseHp * wavePlan.hpMultiplier);
+      scaledSpeed = Math.min(
+        def.maxSpeed,
+        Math.round(def.speed * wavePlan.speedMultiplier)
+      );
+    }
+
+    const scaledDamage = Math.max(
+      1,
+      Math.round(def.attackDamage * wavePlan.damageMultiplier)
+    );
+    const scaledReward = isBoss
+      ? wavePlan.bossReward
+      : Math.max(1, Math.round(wavePlan.normalEnemyReward * def.rewardMultiplier));
+
+    const instance: EnemyInstance = {
+      uid: this.nextUid++,
+      definitionId: def.id,
+      behavior: def.behavior,
+      isBoss,
+      position: { x, y },
+      angle: angleToPlayer,
+      hp: scaledHp,
+      maxHp: scaledHp,
+      speed: scaledSpeed,
+      attackDamage: scaledDamage,
+      attackIntervalSec: def.attackIntervalSec,
+      attackRange: def.attackRange,
+      preferredMinRange: def.preferredMinRange ?? 0,
+      attackCooldown: isBoss
+        ? 0.9
+        : def.behavior === 'artillery_ranged'
+          ? 1.15
+          : def.behavior === 'rusher'
+            ? 0.15
+            : 0.35,
+      radius: def.radius,
+      rewardGold: scaledReward,
+      rewardClaimed: false,
+      hitFlashTimer: 0,
+      hitReactionTimer: 0,
+      hitReactionX: 0,
+      hitReactionY: 0,
+      isDying: false,
+      deathTimer: 0,
+      deathDuration: isBoss ? 0.65 : 0.34,
+      inAttackHold: false,
+      ...(isBoss
+        ? {
+            introTimer: BOSS_CONFIG.introDurationSec,
+            introDuration: BOSS_CONFIG.introDurationSec,
+            burstCooldown: 3.4,
+            burstChargeTimer: 0,
+            burstShotsRemaining: 0,
+            burstShotTimer: 0,
+            specialCooldown: 2.2,
+            telegraphTimer: 0,
+          }
+        : {}),
+    };
+
+    this.activeEnemies.push(instance);
+    return instance;
+  }
+
   private spawnWaveEnemy(
     bounds: ArenaBounds,
     playerPos: Vector2,
-    wavePlan: WavePlan
+    wavePlan: WavePlan,
+    callbacks?: EnemyUpdateCallbacks
   ): boolean {
-    this.spawnCounter++;
-
-    let kind: EnemyKind;
-    if (wavePlan.isBossWave) {
-      kind = BOSS_CONFIG.kind;
-    } else {
-      const heavyFreq = wavePlan.wave >= 6 ? 2 : 3;
-      kind = this.spawnCounter % heavyFreq === 0 ? 'heavy_crawler' : 'scout_buggy';
-    }
+    const kind: EnemyKind = wavePlan.isBossWave
+      ? BOSS_CONFIG.kind
+      : this.selectEnemyKindForWave(wavePlan.wave);
 
     const def = this.definitions.get(kind);
     if (!def) return false;
@@ -369,62 +677,10 @@ export class EnemySystem {
       }
     }
 
-    const angleToPlayer = Math.atan2(playerPos.y - sy, playerPos.x - sx);
-    const isBoss = kind === BOSS_CONFIG.kind;
-
-    let scaledHp: number;
-    let scaledSpeed: number;
-    if (isBoss) {
-      const bossTier = Math.max(
-        1,
-        Math.floor(wavePlan.wave / WAVE_CONFIG.bossWaveInterval)
-      );
-      const tierScale = 1 + (bossTier - 1) * BOSS_CONFIG.hpScalePerBossTier;
-      scaledHp = Math.round(
-        def.baseHp * tierScale * (1 + Math.max(0, wavePlan.wave - 10) * 0.03)
-      );
-      scaledSpeed = Math.min(
-        BOSS_CONFIG.maxSpeed,
-        Math.round(def.speed * wavePlan.speedMultiplier)
-      );
-    } else {
-      scaledHp = Math.round(def.baseHp * wavePlan.hpMultiplier);
-      scaledSpeed = Math.round(def.speed * wavePlan.speedMultiplier);
+    const spawned = this.spawnEnemyAt(kind, sx, sy, playerPos, wavePlan);
+    if (spawned && spawned.isBoss) {
+      callbacks?.onBossSpawned?.(spawned);
     }
-
-    const scaledDamage = Math.round(def.attackDamage * wavePlan.damageMultiplier);
-    const scaledReward = isBoss
-      ? wavePlan.bossReward
-      : wavePlan.normalEnemyReward;
-
-    this.activeEnemies.push({
-      uid: this.nextUid++,
-      definitionId: def.id,
-      isBoss,
-      position: { x: sx, y: sy },
-      angle: angleToPlayer,
-      hp: scaledHp,
-      maxHp: scaledHp,
-      speed: scaledSpeed,
-      attackDamage: scaledDamage,
-      attackIntervalSec: def.attackIntervalSec,
-      attackRange: def.attackRange,
-      attackCooldown: isBoss ? 0.9 : 0.35,
-      radius: def.radius,
-      rewardGold: scaledReward,
-      rewardClaimed: false,
-      hitFlashTimer: 0,
-      isDying: false,
-      deathTimer: 0,
-      deathDuration: isBoss ? 0.55 : 0.34,
-      ...(isBoss
-        ? {
-            specialCooldown: 2.5,
-            telegraphTimer: 0,
-          }
-        : {}),
-    });
-
-    return true;
+    return spawned !== null;
   }
 }

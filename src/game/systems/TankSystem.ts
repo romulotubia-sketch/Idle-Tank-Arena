@@ -72,11 +72,13 @@ export class TankSystem {
     } else if (healHpDelta) {
       const maxHpDelta = Math.max(0, nextStats.maxHp - prevMaxHp);
       nextHp = Math.min(nextStats.maxHp, Math.max(1, prevHp + maxHpDelta));
-    } else if (prevHp >= prevMaxHp) {
-      // Preserve full-HP status when swapping gear at full health without mid-combat heal exploits
-      nextHp = nextStats.maxHp;
     } else {
-      nextHp = Math.min(nextStats.maxHp, Math.max(1, prevHp));
+      // Preserve HP ratio when swapping equipment so unequip/re-equip cannot heal missing HP
+      const ratio = prevHp / Math.max(1, prevMaxHp);
+      nextHp = Math.min(
+        nextStats.maxHp,
+        Math.max(1, Math.round(ratio * nextStats.maxHp))
+      );
     }
 
     this.state.stats = {
@@ -101,6 +103,8 @@ export class TankSystem {
     this.state.turretAngle = -Math.PI / 2 + 0.38;
     this.state.hitFlashTimer = 0;
     this.state.recoilOffset = 0;
+    this.state.bodyRecoilX = 0;
+    this.state.bodyRecoilY = 0;
     this.state.isMoving = false;
     this.state.stats.hp = this.state.stats.maxHp;
     this.fireCooldown = 0.15;
@@ -123,7 +127,11 @@ export class TankSystem {
     return this.state.stats.hp - before;
   }
 
-  takeDamage(rawDamage: number): { effectiveDamage: number; defeated: boolean } {
+  takeDamage(
+    rawDamage: number,
+    sourceX?: number,
+    sourceY?: number
+  ): { effectiveDamage: number; defeated: boolean } {
     if (this.state.stats.hp <= 0) {
       return { effectiveDamage: 0, defeated: true };
     }
@@ -136,7 +144,16 @@ export class TankSystem {
       Math.round(afterArmor - (this.state.stats.flatDamageBlock || 0))
     );
     this.state.stats.hp = Math.max(0, this.state.stats.hp - effectiveDamage);
-    this.state.hitFlashTimer = 0.14;
+    this.state.hitFlashTimer = 0.13;
+
+    if (sourceX !== undefined && sourceY !== undefined) {
+      const dx = this.state.position.x - sourceX;
+      const dy = this.state.position.y - sourceY;
+      const dist = Math.hypot(dx, dy) || 1;
+      this.state.bodyRecoilX = Math.max(-3, Math.min(3, this.state.bodyRecoilX + (dx / dist) * 2.2));
+      this.state.bodyRecoilY = Math.max(-3, Math.min(3, this.state.bodyRecoilY + (dy / dist) * 2.2));
+    }
+
     return {
       effectiveDamage,
       defeated: this.state.stats.hp <= 0,
@@ -152,8 +169,13 @@ export class TankSystem {
       this.state.hitFlashTimer = Math.max(0, this.state.hitFlashTimer - dt);
     }
     if (this.state.recoilOffset > 0) {
-      this.state.recoilOffset = Math.max(0, this.state.recoilOffset - dt * 26);
+      this.state.recoilOffset = Math.max(0, this.state.recoilOffset - dt * 44);
     }
+    const bodyDecay = Math.exp(-18 * dt);
+    this.state.bodyRecoilX *= bodyDecay;
+    this.state.bodyRecoilY *= bodyDecay;
+    if (Math.abs(this.state.bodyRecoilX) < 0.03) this.state.bodyRecoilX = 0;
+    if (Math.abs(this.state.bodyRecoilY) < 0.03) this.state.bodyRecoilY = 0;
 
     if (!isActive || this.state.stats.hp <= 0) {
       this.state.isMoving = false;
@@ -195,9 +217,15 @@ export class TankSystem {
     ) {
       const fireRate = Math.max(0.2, this.state.stats.fireRate);
       this.fireCooldown = 1 / fireRate;
-      this.state.recoilOffset = 5;
+      this.state.recoilOffset = 7.5;
 
       const isCrit = Math.random() * 100 < this.state.stats.critChance;
+      const cos = Math.cos(this.state.turretAngle);
+      const sin = Math.sin(this.state.turretAngle);
+      const kick = isCrit ? 2.4 : 1.5;
+      this.state.bodyRecoilX = -cos * kick;
+      this.state.bodyRecoilY = -sin * kick;
+
       const damage = isCrit
         ? Math.max(
             1,
@@ -208,8 +236,6 @@ export class TankSystem {
           )
         : this.state.stats.attackPower;
 
-      const cos = Math.cos(this.state.turretAngle);
-      const sin = Math.sin(this.state.turretAngle);
       return {
         muzzleX: this.state.position.x + cos * COMBAT_CONFIG.tankMuzzleOffset,
         muzzleY: this.state.position.y + sin * COMBAT_CONFIG.tankMuzzleOffset,

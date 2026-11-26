@@ -56,12 +56,18 @@ export class UpgradeSystem {
   static computeCost(
     baseCost: number,
     costGrowth: number,
-    level: number
+    level: number,
+    softCapLevel = 24,
+    postCapLinearSlope = 0.12
   ): number {
-    return Math.max(
-      1,
-      Math.round(baseCost * Math.pow(costGrowth, Math.max(0, level - 1)))
-    );
+    const steps = Math.max(0, level - 1);
+    const expSteps = Math.min(steps, softCapLevel);
+    const linearExtraSteps = Math.max(0, steps - softCapLevel);
+    const scaled =
+      baseCost *
+      Math.pow(costGrowth, expSteps) *
+      (1 + linearExtraSteps * postCapLinearSlope);
+    return Math.max(1, Math.round(scaled));
   }
 
   getLevel(id: UpgradeId): number {
@@ -109,7 +115,13 @@ export class UpgradeSystem {
       unit: cfg.unit,
       currentValue,
       nextBonus,
-      nextCost: UpgradeSystem.computeCost(cfg.baseCost, cfg.costGrowth, level),
+      nextCost: UpgradeSystem.computeCost(
+        cfg.baseCost,
+        cfg.costGrowth,
+        level,
+        cfg.softCapLevel,
+        cfg.postCapLinearSlope
+      ),
       isMaxed,
     };
   }
@@ -124,10 +136,13 @@ export class UpgradeSystem {
   }
 
   getUpgradeCost(entry: UpgradeEntry): number {
+    const cfg = TANK_UPGRADE_CONFIG.find((c) => c.id === entry.id);
     return UpgradeSystem.computeCost(
       entry.baseCost,
       entry.costGrowth,
-      entry.level
+      entry.level,
+      cfg?.softCapLevel,
+      cfg?.postCapLinearSlope
     );
   }
 

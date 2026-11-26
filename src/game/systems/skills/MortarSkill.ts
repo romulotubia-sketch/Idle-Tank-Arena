@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../../balanceConfig';
 import { SkillDefinition } from '../../types';
 import {
   applySkillDamageBonus,
@@ -7,22 +8,7 @@ import {
   SkillExecutionContext,
 } from './BaseSkill';
 
-interface MortarLevelSpec {
-  damage: number;
-  aoeRadius: number;
-  interval: number;
-  range: number;
-  shells: number;
-  flightDuration: number;
-}
-
-const MORTAR_LEVELS: readonly MortarLevelSpec[] = [
-  { damage: 46, aoeRadius: 74, interval: 3.5, range: 375, shells: 1, flightDuration: 0.72 }, // Lv1
-  { damage: 60, aoeRadius: 84, interval: 3.2, range: 390, shells: 1, flightDuration: 0.68 }, // Lv2
-  { damage: 76, aoeRadius: 94, interval: 2.9, range: 405, shells: 2, flightDuration: 0.65 }, // Lv3: Twin shells
-  { damage: 96, aoeRadius: 106, interval: 2.65, range: 420, shells: 2, flightDuration: 0.6 }, // Lv4
-  { damage: 124, aoeRadius: 120, interval: 2.35, range: 440, shells: 3, flightDuration: 0.56 }, // Lv5
-];
+const MORTAR_LEVELS = GAME_BALANCE.skills.mortar;
 
 export class MortarSkill implements CombatSkillModule {
   readonly definition: SkillDefinition = {

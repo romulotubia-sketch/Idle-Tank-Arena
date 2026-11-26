@@ -1,3 +1,4 @@
+import { GAME_BALANCE, StatRangeConfigSpec } from '../balanceConfig';
 import { EQUIPMENT_SLOT_ORDER, FORGE_CONFIG } from '../constants';
 import {
   EquipmentDefinition,
@@ -87,7 +88,7 @@ export const EQUIPMENT_RARITY_CONFIG: Record<
     id: 'scrap',
     label: 'Scrap',
     tier: 1,
-    statMultiplier: 1.0,
+    statMultiplier: GAME_BALANCE.equipment.rarityStatMultipliers.scrap,
     accentHex: '#94A3B8',
     borderClass: 'border-slate-500/60',
     bgClass: 'bg-slate-900/60',
@@ -98,7 +99,7 @@ export const EQUIPMENT_RARITY_CONFIG: Record<
     id: 'reinforced',
     label: 'Reinforced',
     tier: 2,
-    statMultiplier: 1.4,
+    statMultiplier: GAME_BALANCE.equipment.rarityStatMultipliers.reinforced,
     accentHex: '#34D399',
     borderClass: 'border-emerald-500/60',
     bgClass: 'bg-emerald-950/30',
@@ -109,7 +110,7 @@ export const EQUIPMENT_RARITY_CONFIG: Record<
     id: 'military',
     label: 'Military',
     tier: 3,
-    statMultiplier: 1.85,
+    statMultiplier: GAME_BALANCE.equipment.rarityStatMultipliers.military,
     accentHex: '#38BDF8',
     borderClass: 'border-sky-500/65',
     bgClass: 'bg-sky-950/30',
@@ -120,7 +121,7 @@ export const EQUIPMENT_RARITY_CONFIG: Record<
     id: 'advanced',
     label: 'Advanced',
     tier: 4,
-    statMultiplier: 2.35,
+    statMultiplier: GAME_BALANCE.equipment.rarityStatMultipliers.advanced,
     accentHex: '#A78BFA',
     borderClass: 'border-violet-500/65',
     bgClass: 'bg-violet-950/30',
@@ -131,7 +132,7 @@ export const EQUIPMENT_RARITY_CONFIG: Record<
     id: 'elite',
     label: 'Elite',
     tier: 5,
-    statMultiplier: 3.0,
+    statMultiplier: GAME_BALANCE.equipment.rarityStatMultipliers.elite,
     accentHex: '#FBBF24',
     borderClass: 'border-amber-400/75',
     bgClass: 'bg-amber-950/30',
@@ -142,7 +143,7 @@ export const EQUIPMENT_RARITY_CONFIG: Record<
     id: 'prototype',
     label: 'Prototype',
     tier: 6,
-    statMultiplier: 3.8,
+    statMultiplier: GAME_BALANCE.equipment.rarityStatMultipliers.prototype,
     accentHex: '#FB7185',
     borderClass: 'border-rose-500/75',
     bgClass: 'bg-rose-950/35',
@@ -345,19 +346,13 @@ const RARITY_PREFIXES: Record<EquipmentRarity, readonly string[]> = {
   prototype: ['Aegis-X', 'Hyperion', 'Chimera', 'Apex-MK'],
 };
 
-interface StatRangeSpec {
-  key: EquipmentStatKey;
-  min: number;
-  max: number;
-}
-
 interface SlotForgeBlueprint {
   slot: EquipmentSlotType;
   iconIds: readonly EquipmentIconId[];
   nouns: readonly string[];
   descriptions: readonly string[];
-  primaryStats: readonly StatRangeSpec[];
-  secondaryStats: readonly StatRangeSpec[];
+  primaryStats: readonly StatRangeConfigSpec[];
+  secondaryStats: readonly StatRangeConfigSpec[];
   preferredEffects: readonly EquipmentSpecialEffectId[];
 }
 
@@ -370,16 +365,7 @@ const SLOT_FORGE_BLUEPRINTS: Record<EquipmentSlotType, SlotForgeBlueprint> = {
       'Machined artillery barrel engineered for sustained armor penetration.',
       'Recalibrated main gun assembly built for high-velocity shell delivery.',
     ],
-    primaryStats: [
-      { key: 'attackDamage', min: 5, max: 9 },
-      { key: 'attackSpeed', min: 0.07, max: 0.13 },
-    ],
-    secondaryStats: [
-      { key: 'critChance', min: 1.5, max: 3.0 },
-      { key: 'critDamage', min: 0.08, max: 0.15 },
-      { key: 'skillDamage', min: 4, max: 8 },
-    ],
-    preferredEffects: ['boss_breaker', 'overcharge_crits'],
+    ...GAME_BALANCE.equipment.slotBlueprints.cannon,
   },
   armor: {
     slot: 'armor',
@@ -389,16 +375,7 @@ const SLOT_FORGE_BLUEPRINTS: Record<EquipmentSlotType, SlotForgeBlueprint> = {
       'Layered steel plating forged to deflect incoming enemy barrage fire.',
       'Shock-absorbing chassis armor built to endure prolonged sieges.',
     ],
-    primaryStats: [
-      { key: 'armor', min: 4, max: 8 },
-      { key: 'maxHp', min: 22, max: 38 },
-    ],
-    secondaryStats: [
-      { key: 'maxHp', min: 18, max: 30 },
-      { key: 'moveSpeed', min: 4, max: 8 },
-      { key: 'attackDamage', min: 2, max: 4 },
-    ],
-    preferredEffects: ['reactive_plating', 'reactive_regen'],
+    ...GAME_BALANCE.equipment.slotBlueprints.armor,
   },
   engine: {
     slot: 'engine',
@@ -408,16 +385,7 @@ const SLOT_FORGE_BLUEPRINTS: Record<EquipmentSlotType, SlotForgeBlueprint> = {
       'High-torque propulsion unit delivering rapid battlefield repositioning.',
       'Pressurized tank engine engineered for sustained maneuvering output.',
     ],
-    primaryStats: [
-      { key: 'moveSpeed', min: 12, max: 20 },
-      { key: 'attackSpeed', min: 0.05, max: 0.1 },
-    ],
-    secondaryStats: [
-      { key: 'maxHp', min: 14, max: 26 },
-      { key: 'skillDamage', min: 5, max: 9 },
-      { key: 'armor', min: 2, max: 4 },
-    ],
-    preferredEffects: ['reactive_regen', 'capacitor_boost'],
+    ...GAME_BALANCE.equipment.slotBlueprints.engine,
   },
   tracks: {
     slot: 'tracks',
@@ -427,16 +395,7 @@ const SLOT_FORGE_BLUEPRINTS: Record<EquipmentSlotType, SlotForgeBlueprint> = {
       'Heavy-duty track suspension improving stability across cratered terrain.',
       'Reinforced drive sprockets balancing agility with undercarriage protection.',
     ],
-    primaryStats: [
-      { key: 'moveSpeed', min: 9, max: 16 },
-      { key: 'armor', min: 3, max: 6 },
-    ],
-    secondaryStats: [
-      { key: 'maxHp', min: 16, max: 28 },
-      { key: 'critChance', min: 1.2, max: 2.5 },
-      { key: 'attackSpeed', min: 0.04, max: 0.08 },
-    ],
-    preferredEffects: ['reactive_plating', 'reactive_regen'],
+    ...GAME_BALANCE.equipment.slotBlueprints.tracks,
   },
   targeting_system: {
     slot: 'targeting_system',
@@ -446,16 +405,7 @@ const SLOT_FORGE_BLUEPRINTS: Record<EquipmentSlotType, SlotForgeBlueprint> = {
       'Gyro-stabilized targeting computer locking onto weak structural seams.',
       'Precision ballistic optics calibrating critical turret strike trajectories.',
     ],
-    primaryStats: [
-      { key: 'critChance', min: 2.8, max: 4.8 },
-      { key: 'critDamage', min: 0.1, max: 0.18 },
-    ],
-    secondaryStats: [
-      { key: 'attackDamage', min: 3, max: 6 },
-      { key: 'attackSpeed', min: 0.05, max: 0.09 },
-      { key: 'skillDamage', min: 5, max: 9 },
-    ],
-    preferredEffects: ['overcharge_crits', 'boss_breaker'],
+    ...GAME_BALANCE.equipment.slotBlueprints.targeting_system,
   },
   auxiliary_system: {
     slot: 'auxiliary_system',
@@ -465,16 +415,7 @@ const SLOT_FORGE_BLUEPRINTS: Record<EquipmentSlotType, SlotForgeBlueprint> = {
       'Secondary tactical sub-system supercharging mounted combat weapons.',
       'Auxiliary conduit array boosting skill discharge efficiency under fire.',
     ],
-    primaryStats: [
-      { key: 'skillDamage', min: 8, max: 14 },
-      { key: 'attackSpeed', min: 0.05, max: 0.1 },
-    ],
-    secondaryStats: [
-      { key: 'critDamage', min: 0.08, max: 0.16 },
-      { key: 'maxHp', min: 15, max: 28 },
-      { key: 'attackDamage', min: 3, max: 6 },
-    ],
-    preferredEffects: ['capacitor_boost', 'reactive_regen'],
+    ...GAME_BALANCE.equipment.slotBlueprints.auxiliary_system,
   },
 };
 
@@ -493,52 +434,45 @@ const SPECIAL_EFFECT_BLUEPRINTS: Record<
   boss_breaker: {
     id: 'boss_breaker',
     name: 'Siege Breaker',
-    baseMin: 6,
-    baseMax: 10,
+    baseMin: GAME_BALANCE.equipment.specialEffectRanges.boss_breaker.min,
+    baseMax: GAME_BALANCE.equipment.specialEffectRanges.boss_breaker.max,
     buildDescription: (v) => `Deals +${v}% bonus damage against Boss enemies.`,
   },
   reactive_plating: {
     id: 'reactive_plating',
     name: 'Reactive Plating',
-    baseMin: 1,
-    baseMax: 2,
+    baseMin: GAME_BALANCE.equipment.specialEffectRanges.reactive_plating.min,
+    baseMax: GAME_BALANCE.equipment.specialEffectRanges.reactive_plating.max,
     buildDescription: (v) =>
       `Blocks an additional ${v} flat damage from each enemy hit.`,
   },
   reactive_regen: {
     id: 'reactive_regen',
     name: 'Hull Nanorepair',
-    baseMin: 1,
-    baseMax: 2,
+    baseMin: GAME_BALANCE.equipment.specialEffectRanges.reactive_regen.min,
+    baseMax: GAME_BALANCE.equipment.specialEffectRanges.reactive_regen.max,
     buildDescription: (v) =>
       `Restores ${v} HP whenever your tank destroys an enemy.`,
   },
   overcharge_crits: {
     id: 'overcharge_crits',
     name: 'Overcharged Core',
-    baseMin: 4,
-    baseMax: 8,
+    baseMin: GAME_BALANCE.equipment.specialEffectRanges.overcharge_crits.min,
+    baseMax: GAME_BALANCE.equipment.specialEffectRanges.overcharge_crits.max,
     buildDescription: (v) =>
       `Critical cannon hits deal +${v} bonus impact damage.`,
   },
   capacitor_boost: {
     id: 'capacitor_boost',
     name: 'Aux Surge',
-    baseMin: 5,
-    baseMax: 9,
+    baseMin: GAME_BALANCE.equipment.specialEffectRanges.capacitor_boost.min,
+    baseMax: GAME_BALANCE.equipment.specialEffectRanges.capacitor_boost.max,
     buildDescription: (v) =>
       `Amplifies all mounted combat skill damage by an extra +${v}%.`,
   },
 };
 
-const SPECIAL_EFFECT_TIER_SCALE: Record<EquipmentRarity, number> = {
-  scrap: 1,
-  reinforced: 1,
-  military: 1.0,
-  advanced: 1.45,
-  elite: 2.0,
-  prototype: 2.75,
-};
+const SPECIAL_EFFECT_TIER_SCALE = GAME_BALANCE.equipment.specialEffectTierScale;
 
 function randomFloat(min: number, max: number): number {
   return min + Math.random() * (max - min);

@@ -53,12 +53,45 @@ export class WaveSystem {
     return this.currentPlan;
   }
 
-  loadState(saved: Partial<WaveState>): void {
+  exportPersistentState(): WaveState {
+    const plan = this.computeWavePlan(this.state.currentWave);
+    return {
+      currentWave: plan.wave,
+      highestWave: Math.max(this.state.highestWave, plan.wave),
+      enemiesRemaining: plan.totalEnemies,
+      enemiesTotal: plan.totalEnemies,
+      enemiesSpawned: 0,
+      enemiesDefeatedInWave: 0,
+      isBossWave: plan.isBossWave,
+      isTransitioning: false,
+      transitionRemainingSec: 0,
+    };
+  }
+
+  loadState(saved?: Partial<WaveState>): void {
+    if (!saved || typeof saved !== 'object') return;
+    const savedCurrent =
+      typeof saved.currentWave === 'number' &&
+      Number.isFinite(saved.currentWave) &&
+      saved.currentWave >= 1
+        ? Math.floor(saved.currentWave)
+        : 1;
     const savedHigh =
-      typeof saved.highestWave === 'number' && saved.highestWave >= 1
+      typeof saved.highestWave === 'number' &&
+      Number.isFinite(saved.highestWave) &&
+      saved.highestWave >= 1
         ? Math.floor(saved.highestWave)
         : 1;
-    this.state.highestWave = Math.max(this.state.highestWave, savedHigh);
+
+    this.lastRewardedWave = Math.max(0, savedCurrent - 1);
+    this.state.highestWave = Math.max(1, savedHigh, savedCurrent);
+    this.applyPlanToState(savedCurrent);
+  }
+
+  restartWave(waveNumber: number): void {
+    const safeWave = Math.max(1, Math.floor(waveNumber));
+    this.lastRewardedWave = Math.max(0, safeWave - 1);
+    this.applyPlanToState(safeWave);
   }
 
   resetForNewRun(): void {
@@ -91,9 +124,22 @@ export class WaveSystem {
 
     const tierBonus =
       Math.floor(wOffset / 5) * WAVE_CONFIG.hpTierBonusPer5Waves;
+    const lateHpWaves = Math.max(0, wave - WAVE_CONFIG.hpLateWaveThreshold);
     const hpMultiplier =
-      1 + wOffset * WAVE_CONFIG.hpGrowthPerWave + tierBonus;
-    const damageMultiplier = 1 + wOffset * WAVE_CONFIG.damageGrowthPerWave;
+      1 +
+      wOffset * WAVE_CONFIG.hpGrowthPerWave +
+      tierBonus +
+      lateHpWaves * WAVE_CONFIG.hpLateWaveBonusPerWave;
+
+    const lateDmgWaves = Math.max(
+      0,
+      wave - WAVE_CONFIG.damageLateWaveThreshold
+    );
+    const damageMultiplier =
+      1 +
+      wOffset * WAVE_CONFIG.damageGrowthPerWave +
+      lateDmgWaves * WAVE_CONFIG.damageLateWaveBonusPerWave;
+
     const speedMultiplier = Math.min(
       WAVE_CONFIG.maxSpeedMultiplier,
       1 + wOffset * WAVE_CONFIG.speedGrowthPerWave

@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../../balanceConfig';
 import { SkillDefinition } from '../../types';
 import {
   applySkillDamageBonus,
@@ -6,23 +7,7 @@ import {
   SkillExecutionContext,
 } from './BaseSkill';
 
-interface LandmineLevelSpec {
-  damage: number;
-  aoeRadius: number;
-  interval: number;
-  maxMines: number;
-  deployCount: number;
-  triggerRadius: number;
-  armTimer: number;
-}
-
-const MINE_LEVELS: readonly LandmineLevelSpec[] = [
-  { damage: 42, aoeRadius: 64, interval: 3.4, maxMines: 4, deployCount: 1, triggerRadius: 24, armTimer: 0.4 },   // Lv1
-  { damage: 55, aoeRadius: 72, interval: 3.1, maxMines: 5, deployCount: 1, triggerRadius: 26, armTimer: 0.35 },  // Lv2
-  { damage: 70, aoeRadius: 80, interval: 2.8, maxMines: 6, deployCount: 2, triggerRadius: 28, armTimer: 0.3 },   // Lv3: Deploys 2 mines
-  { damage: 88, aoeRadius: 90, interval: 2.5, maxMines: 8, deployCount: 2, triggerRadius: 31, armTimer: 0.25 },  // Lv4
-  { damage: 112, aoeRadius: 102, interval: 2.2, maxMines: 10, deployCount: 3, triggerRadius: 34, armTimer: 0.2 }, // Lv5
-];
+const MINE_LEVELS = GAME_BALANCE.skills.landmines;
 
 export class LandmineSkill implements CombatSkillModule {
   readonly definition: SkillDefinition = {

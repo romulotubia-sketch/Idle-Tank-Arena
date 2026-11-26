@@ -41,8 +41,6 @@ interface BottomHudProps {
   highlightedSlotIndex: number | null;
   invalidSlotIndex: number | null;
   mergeablePairAvailable: boolean;
-  actionBanner: ActionBannerInfo | null;
-  statusNotice: StatusNoticeInfo | null;
   onSummonClick: () => void;
   onSkillSlotClick: (slotIndex: number) => void;
   onMergeAreaClick: () => void;
@@ -51,7 +49,7 @@ interface BottomHudProps {
 export function renderSkillIcon(
   skillId: SkillId,
   color: string,
-  className = 'w-4 h-4 sm:w-4.5 sm:h-4.5'
+  className = 'w-4 h-4'
 ) {
   const style = { color };
   switch (skillId) {
@@ -84,8 +82,6 @@ export function BottomHud({
   highlightedSlotIndex,
   invalidSlotIndex,
   mergeablePairAvailable,
-  actionBanner,
-  statusNotice,
   onSummonClick,
   onSkillSlotClick,
   onMergeAreaClick,
@@ -99,62 +95,11 @@ export function BottomHud({
     selectedSlot?.skillId ? skillRegistry.getDefinition(selectedSlot.skillId) : undefined;
 
   return (
-    <footer className="relative shrink-0 bg-[#1B222B] border-t-2 border-[#2D3846] px-2.5 sm:px-4 py-2 select-none z-10 shadow-[0_-4px_16px_rgba(0,0,0,0.35)]">
-      {/* Lightweight Summon / Merge Feedback Banner */}
-      {actionBanner && (
+    <footer className="relative shrink-0 bg-[#161C24] border-t border-[#2D3846] px-2 sm:px-3 py-1.5 select-none z-20">
+      <div className="flex flex-col sm:flex-row landscape:flex-row items-stretch sm:items-center landscape:items-center justify-between gap-1.5 sm:gap-2.5 max-w-[1600px] mx-auto">
+        {/* 6 Adaptive Skill Slots */}
         <div
-          role="status"
-          aria-live="polite"
-          className="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-[#12171E] border-2 rounded-lg px-3 py-1.5 shadow-xl whitespace-nowrap animate-summon-pop"
-          style={{
-            borderColor:
-              actionBanner.kind === 'merge' ? '#34D399' : actionBanner.accentColor,
-          }}
-        >
-          {renderSkillIcon(actionBanner.skillId, actionBanner.accentColor)}
-          <span className="text-xs font-bold text-white">
-            {actionBanner.kind === 'merge'
-              ? `Merged ${actionBanner.name}`
-              : `Summoned ${actionBanner.name}`}
-          </span>
-          <span className="font-mono-tabular text-[11px] font-bold text-amber-300">
-            {actionBanner.kind === 'merge' && actionBanner.previousLevel !== undefined
-              ? `Lv.${actionBanner.previousLevel} → Lv.${actionBanner.level}`
-              : `Lv.${actionBanner.level}`}
-          </span>
-          {actionBanner.kind === 'summon' && actionBanner.unlockedNew && (
-            <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/60 text-[10px] font-bold text-emerald-300 uppercase tracking-wide">
-              Unlocked!
-            </span>
-          )}
-          {actionBanner.kind === 'summon' &&
-            actionBanner.fragmentsAwarded !== undefined &&
-            actionBanner.fragmentsAwarded > 0 && (
-              <span className="font-mono-tabular text-[11px] font-bold text-sky-300">
-                +{actionBanner.fragmentsAwarded} Frags
-              </span>
-            )}
-        </div>
-      )}
-
-      {!actionBanner && statusNotice && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 bg-[#12171E] border text-xs font-medium px-3 py-1 rounded-md shadow-lg whitespace-nowrap ${
-            statusNotice.tone === 'error'
-              ? 'border-rose-500/70 text-rose-200'
-              : 'border-amber-500/50 text-amber-200'
-          }`}
-        >
-          {statusNotice.text}
-        </div>
-      )}
-
-      <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 sm:gap-3 max-w-[1600px] mx-auto">
-        {/* Left/Center: 6 Clearly Defined Skill Slots */}
-        <div
-          className="flex items-center gap-1.5 sm:gap-2"
+          className="grid grid-cols-6 sm:flex landscape:flex items-center gap-1 sm:gap-1.5"
           aria-label="Active skill slots"
         >
           {skillSlots.slice(0, 6).map((slot) => {
@@ -207,7 +152,7 @@ export function BottomHud({
                 title={
                   def
                     ? `${def.name} Lv.${slot.level}${isMaxLevel ? ' (Max)' : ''}`
-                    : `Skill slot ${slot.index + 1} (Vacant)`
+                    : `Skill slot ${slot.index + 1} (Empty)`
                 }
                 aria-label={
                   def
@@ -218,16 +163,16 @@ export function BottomHud({
                             ? ', tap to merge'
                             : ''
                       }`
-                    : `Skill slot ${slot.index + 1}, vacant`
+                    : `Skill slot ${slot.index + 1}, empty`
                 }
-                className={`group relative overflow-hidden w-11 h-11 sm:w-13 sm:h-13 lg:w-14 lg:h-14 rounded-lg flex flex-col items-center justify-center transition-colors shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
+                className={`group relative overflow-hidden w-full landscape:w-11 sm:w-12 md:w-13 h-11 sm:h-12 rounded-lg flex flex-col items-center justify-center transition-colors shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400 ${
                   def
                     ? isSelected
-                      ? 'bg-[#172C42] border-2 ring-2 ring-sky-400'
+                      ? 'bg-[#172C42] border-2 ring-1 ring-sky-400'
                       : isCompatibleTarget
-                        ? 'bg-[#132B24] border-2 ring-2 ring-emerald-400/80'
-                        : 'bg-[#17202B] hover:bg-[#1E2937] border-2'
-                    : 'bg-[#11161C] hover:bg-[#151C24] border-2 border-dashed border-[#2F3B4A]'
+                        ? 'bg-[#132B24] border-2 ring-1 ring-emerald-400/80'
+                        : 'bg-[#1A232E] hover:bg-[#212C3A] border-2'
+                    : 'bg-[#0E1318] hover:bg-[#141B23] border border-dashed border-[#2C3746]'
                 } ${isHighlighted ? 'animate-summon-pop ring-2 ring-amber-300' : ''} ${
                   isInvalid ? 'animate-merge-invalid ring-2 ring-rose-500' : ''
                 }`}
@@ -241,31 +186,28 @@ export function BottomHud({
                   />
                 )}
 
-                <span className="relative z-10 flex flex-col items-center justify-center leading-none">
+                <span className="relative z-10 flex flex-col items-center justify-center leading-none pt-1">
                   {def && slot.skillId ? (
                     <>
-                      {renderSkillIcon(slot.skillId, def.accentColor)}
-                      <span className="mt-1 text-[9px] sm:text-[10px] font-semibold text-slate-100 truncate max-w-[44px] sm:max-w-[50px]">
+                      {renderSkillIcon(slot.skillId, def.accentColor, 'w-4 h-4')}
+                      <span className="mt-0.5 text-[9px] font-semibold text-slate-100 truncate max-w-[38px] sm:max-w-[46px]">
                         {def.shortLabel}
                       </span>
                     </>
                   ) : (
-                    <>
-                      <Plus className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-400 transition-colors" />
-                      <span className="mt-0.5 text-[8px] text-slate-600 font-medium">
-                        Empty
-                      </span>
-                    </>
+                    <Plus className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-400 transition-colors" />
                   )}
                 </span>
 
                 <span
-                  className={`absolute top-0.5 left-1 font-mono-tabular text-[9px] font-bold z-10 ${
+                  className={`absolute top-0.5 left-1 font-mono-tabular text-[8px] font-bold z-10 ${
                     isSelected
                       ? 'text-sky-300'
                       : isCompatibleTarget
                         ? 'text-emerald-300'
-                        : 'text-slate-400'
+                        : def
+                          ? 'text-slate-400'
+                          : 'text-slate-600'
                   }`}
                 >
                   {slot.index + 1}
@@ -273,7 +215,7 @@ export function BottomHud({
 
                 {def && (
                   <span
-                    className={`absolute top-0.5 right-1 font-mono-tabular text-[9px] font-bold z-10 ${
+                    className={`absolute top-0.5 right-1 font-mono-tabular text-[8px] sm:text-[9px] font-bold z-10 ${
                       isMaxLevel ? 'text-amber-200' : 'text-amber-300'
                     }`}
                   >
@@ -285,9 +227,8 @@ export function BottomHud({
           })}
         </div>
 
-        {/* Right Group: Skill Merge Indicator/Cancel + Summon Button & Cost */}
-        <div className="flex items-center gap-2 sm:gap-3 ml-auto shrink-0">
-          {/* Interactive Skill Merge Bay / Cancel Control */}
+        {/* Right Group: Compact Merge Control + Summon Button */}
+        <div className="flex items-center gap-1.5 sm:gap-2 sm:ml-auto landscape:ml-auto shrink-0">
           <button
             type="button"
             onClick={(e) => {
@@ -301,59 +242,49 @@ export function BottomHud({
                   ? 'Skill merge ready, tap matching skill slots'
                   : 'Skill merge instructions'
             }
-            className={`flex items-center gap-2 h-11 sm:h-13 lg:h-14 px-2.5 sm:px-3.5 rounded-lg border-2 text-left transition-colors shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-sky-400 ${
+            className={`flex-1 sm:flex-initial landscape:flex-initial flex items-center justify-center gap-1.5 h-10 sm:h-12 px-2.5 sm:px-3 rounded-lg border text-left transition-colors shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-sky-400 ${
               selectedDef && selectedSlot
                 ? 'bg-[#172B3F] hover:bg-[#1E3750] border-sky-400 text-sky-100'
                 : mergeablePairAvailable
                   ? 'bg-[#132924] hover:bg-[#17332D] border-emerald-400/75 text-emerald-100'
-                  : 'bg-[#15202E] hover:bg-[#1A283A] border-dashed border-sky-400/50 text-sky-200'
+                  : 'bg-[#121A24] hover:bg-[#182230] border-dashed border-sky-400/45 text-sky-200'
             }`}
           >
             {selectedDef && selectedSlot?.skillId ? (
               <>
-                <div className="flex items-center gap-1 shrink-0">
-                  {renderSkillIcon(selectedSlot.skillId, selectedDef.accentColor)}
-                  <X className="w-3.5 h-3.5 text-sky-300" />
-                </div>
-                <div className="hidden md:flex flex-col leading-tight">
-                  <span className="text-xs font-bold text-white whitespace-nowrap">
-                    {selectedDef.shortLabel} L{selectedSlot.level}
-                  </span>
-                  <span className="text-[10px] text-sky-300 whitespace-nowrap">
-                    Tap to Cancel
-                  </span>
-                </div>
+                {renderSkillIcon(selectedSlot.skillId, selectedDef.accentColor, 'w-3.5 h-3.5')}
+                <span className="text-[11px] sm:text-xs font-bold text-white whitespace-nowrap">
+                  Cancel
+                </span>
+                <X className="w-3.5 h-3.5 text-sky-300 shrink-0" />
               </>
             ) : (
               <>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Combine
-                    className={`w-4 h-4 ${
-                      mergeablePairAvailable ? 'text-emerald-300' : 'text-sky-300'
-                    }`}
-                  />
-                </div>
-                <div className="hidden md:flex flex-col leading-tight">
+                <Combine
+                  className={`w-4 h-4 shrink-0 ${
+                    mergeablePairAvailable ? 'text-emerald-300' : 'text-sky-300'
+                  }`}
+                />
+                <div className="flex sm:hidden landscape:hidden md:flex flex-col leading-tight">
                   <span
-                    className={`text-xs font-bold whitespace-nowrap ${
+                    className={`text-[11px] font-bold whitespace-nowrap ${
                       mergeablePairAvailable ? 'text-emerald-200' : 'text-sky-200'
                     }`}
                   >
-                    Skill Merge
+                    Merge
                   </span>
                   <span
-                    className={`text-[10px] whitespace-nowrap ${
+                    className={`text-[9px] whitespace-nowrap ${
                       mergeablePairAvailable ? 'text-emerald-300' : 'text-sky-300/75'
                     }`}
                   >
-                    {mergeablePairAvailable ? 'Pair Ready' : 'Tap 2 Same'}
+                    {mergeablePairAvailable ? 'Ready' : '2 Same'}
                   </span>
                 </div>
               </>
             )}
           </button>
 
-          {/* Functional Summon Button + Cost Display */}
           <button
             type="button"
             disabled={!canSummon}
@@ -368,19 +299,19 @@ export function BottomHud({
                   ? `Summon disabled, requires ${summonCost} coins`
                   : `Summon random skill for ${summonCost} coins`
             }
-            className={`flex items-center gap-2 sm:gap-2.5 h-11 sm:h-13 lg:h-14 px-3 sm:px-4 rounded-lg border-2 font-semibold transition-all whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-amber-300 ${
+            className={`flex items-center justify-center gap-1.5 sm:gap-2 h-10 sm:h-12 px-3 sm:px-3.5 rounded-lg border font-semibold transition-all whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-amber-300 ${
               canSummon
                 ? 'bg-amber-500 hover:bg-amber-400 active:scale-95 active:bg-amber-600 border-amber-300 text-slate-950 shadow-md cursor-pointer'
-                : 'bg-[#262C34] border-[#39414D] text-slate-400 opacity-70 cursor-not-allowed'
+                : 'bg-[#232932] border-[#39414D] text-slate-400 opacity-70 cursor-not-allowed'
             }`}
           >
             <Sparkles className="w-4 h-4 shrink-0" />
-            <div className="flex flex-col items-start leading-tight">
+            <div className="flex flex-col items-start leading-none">
               <span className="font-display text-sm sm:text-base font-bold tracking-wide">
-                {!hasVacantSlot ? 'Slots Full' : 'Summon'}
+                {!hasVacantSlot ? 'Full' : 'Summon'}
               </span>
               <span
-                className={`inline-flex items-center gap-1 font-mono-tabular text-[11px] font-bold ${
+                className={`inline-flex items-center gap-0.5 font-mono-tabular text-[10px] font-bold mt-0.5 ${
                   canSummon
                     ? 'text-slate-900'
                     : !hasVacantSlot
@@ -390,11 +321,11 @@ export function BottomHud({
               >
                 {hasVacantSlot ? (
                   <>
-                    <Coins className="w-3 h-3 shrink-0" />
+                    <Coins className="w-2.5 h-2.5 shrink-0" />
                     <span>{summonCost}</span>
                   </>
                 ) : (
-                  <span>6 / 6</span>
+                  <span>6/6</span>
                 )}
               </span>
             </div>

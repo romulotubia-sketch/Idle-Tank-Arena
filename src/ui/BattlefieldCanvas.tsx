@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { BookOpen, Hammer, Package, SlidersHorizontal } from 'lucide-react';
 import { GameEngine } from '../game/engine/GameEngine';
 import { ForgeStatus, GamePhase, PlayerTankState } from '../game/types';
+import { ActivePanelId, BattlefieldNav } from './components/BattlefieldNav';
 import { VirtualJoystick } from './VirtualJoystick';
 
 interface BattlefieldCanvasProps {
   engine: GameEngine;
   tank: PlayerTankState;
   phase: GamePhase;
-  isUpgradesOpen: boolean;
-  isEquipmentOpen: boolean;
-  isForgeOpen: boolean;
-  isCollectionOpen: boolean;
+  activePanel: ActivePanelId;
   forgeStatus: ForgeStatus;
+  autoForgeEnabled?: boolean;
   equippedCount: number;
   unlockedSkillCount: number;
   hasAffordableUpgrade: boolean;
@@ -67,11 +65,9 @@ export function BattlefieldCanvas({
   engine,
   tank,
   phase,
-  isUpgradesOpen,
-  isEquipmentOpen,
-  isForgeOpen,
-  isCollectionOpen,
+  activePanel,
   forgeStatus,
+  autoForgeEnabled = false,
   equippedCount,
   unlockedSkillCount,
   hasAffordableUpgrade,
@@ -137,7 +133,6 @@ export function BattlefieldCanvas({
       return;
     }
 
-    // Focus battlefield container so WASD / Arrow keys work immediately after Start/Restart
     containerRef.current?.focus({ preventScroll: true });
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -187,6 +182,18 @@ export function BattlefieldCanvas({
     0,
     Math.min(100, Math.round((tank.stats.hp / tank.stats.maxHp) * 100))
   );
+  const hpColorClass =
+    hpPct <= 25
+      ? 'bg-rose-500'
+      : hpPct <= 55
+        ? 'bg-amber-400'
+        : 'bg-emerald-500';
+  const hpTextClass =
+    hpPct <= 25
+      ? 'text-rose-300'
+      : hpPct <= 55
+        ? 'text-amber-300'
+        : 'text-emerald-400';
 
   return (
     <div
@@ -195,7 +202,7 @@ export function BattlefieldCanvas({
       onPointerDown={() => {
         containerRef.current?.focus({ preventScroll: true });
       }}
-      className="relative flex-1 w-full h-full min-h-[180px] bg-[#202B1E] overflow-hidden select-none outline-none"
+      className="relative flex-1 w-full h-full min-h-[160px] bg-[#202B1E] overflow-hidden select-none outline-none"
     >
       <canvas
         ref={canvasRef}
@@ -203,144 +210,48 @@ export function BattlefieldCanvas({
         aria-label="Idle Tank Arena Battlefield"
       />
 
-      {/* Compact tank hull integrity badge tucked in top-left corner */}
-      <div className="pointer-events-none absolute top-2.5 left-2.5 flex flex-col gap-1 bg-[#141A21]/92 border border-[#334155] rounded-lg px-2.5 py-1.5 shadow-md">
-        <div className="flex items-center justify-between gap-3 text-[11px]">
-          <span className="font-semibold text-slate-200 whitespace-nowrap">
-            Tank Hull
-          </span>
-          <span className="font-mono-tabular text-emerald-400 font-bold whitespace-nowrap">
-            {tank.stats.hp} / {tank.stats.maxHp}
+      {/* Slim Tank Hull HP Indicator (top-left) */}
+      <div className="pointer-events-none absolute top-2 left-2 flex flex-col gap-1 bg-[#12171E]/88 border border-[#2E3A48] rounded-md px-2 py-1 shadow-md">
+        <div className="flex items-center justify-between gap-2 text-[10px] leading-none">
+          <span className="font-semibold text-slate-300">Hull</span>
+          <span className={`font-mono-tabular font-bold ${hpTextClass}`}>
+            {tank.stats.hp}/{tank.stats.maxHp}
           </span>
         </div>
-        <div className="w-32 sm:w-40 h-1.5 bg-[#0B0F14] rounded-full overflow-hidden border border-white/10">
+        <div className="w-24 sm:w-32 h-1.5 bg-[#090C10] rounded-xs overflow-hidden border border-white/10">
           <div
-            className="h-full bg-emerald-500 transition-transform duration-200 origin-left"
+            className={`h-full transition-transform duration-200 origin-left ${hpColorClass}`}
             style={{ transform: `scaleX(${hpPct / 100})` }}
           />
         </div>
       </div>
 
-      {/* Subtle desktop & mobile movement cue */}
+      {/* Virtual Joystick anchored comfortably at lower-left */}
       {phase === 'ACTIVE' && (
-        <div className="pointer-events-none hidden sm:flex items-center gap-2 absolute top-2.5 right-2.5 bg-[#141A21]/85 border border-white/10 rounded-md px-2.5 py-1 text-[11px] text-slate-300">
-          <span>Move: WASD / Arrows or Joystick</span>
-        </div>
-      )}
-
-      {/* Virtual Joystick for mobile & touch movement */}
-      {phase === 'ACTIVE' && (
-        <div className="absolute bottom-3 left-3 z-10">
+        <div className="absolute bottom-2 left-2.5 z-10">
           <VirtualJoystick onMove={handleJoystickMove} />
         </div>
       )}
 
-      {/* Permanent Tank Upgrades, Equipment, Forge & Skill Collection toggle buttons at bottom-right */}
-      {phase === 'ACTIVE' &&
-        !isUpgradesOpen &&
-        !isEquipmentOpen &&
-        !isForgeOpen &&
-        !isCollectionOpen && (
-          <div className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 sm:gap-2">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onToggleCollection();
-              }}
-              aria-label="Open Skill Collection"
-              className={`relative flex items-center gap-1.5 px-2 sm:px-3 py-2 sm:py-2.5 rounded-xl border shadow-lg text-xs sm:text-sm font-bold transition-all active:scale-95 ${
-                hasAffordableCollectionUpgrade
-                  ? 'bg-[#17282D]/95 hover:bg-[#1E353C] border-emerald-400/75 text-emerald-200'
-                  : 'bg-[#18202A]/92 hover:bg-[#212B38] border-[#334155] text-slate-100'
-              }`}
-            >
-              <BookOpen className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>Skills</span>
-              <span className="font-mono-tabular text-[10px] text-slate-400">
-                {unlockedSkillCount}/8
-              </span>
-              {hasAffordableCollectionUpgrade && (
-                <span
-                  aria-hidden="true"
-                  className="w-2 h-2 rounded-xs bg-emerald-400 shadow-sm"
-                />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onToggleForge();
-              }}
-              aria-label="Open Equipment Forge"
-              className={`relative flex items-center gap-1.5 px-2 sm:px-3 py-2 sm:py-2.5 rounded-xl border shadow-lg text-xs sm:text-sm font-bold transition-all active:scale-95 ${
-                forgeStatus === 'result_ready'
-                  ? 'bg-[#2A2116]/95 hover:bg-[#372B1C] border-amber-400 text-amber-200'
-                  : 'bg-[#18202A]/92 hover:bg-[#212B38] border-[#334155] text-slate-100'
-              }`}
-            >
-              <Hammer
-                className={`w-4 h-4 shrink-0 ${
-                  forgeStatus === 'forging'
-                    ? 'text-amber-300 animate-pulse'
-                    : 'text-amber-400'
-                }`}
-              />
-              <span>Forge</span>
-              {forgeStatus !== 'idle' && (
-                <span
-                  aria-hidden="true"
-                  className={`w-2 h-2 rounded-xs ${
-                    forgeStatus === 'result_ready'
-                      ? 'bg-emerald-400'
-                      : 'bg-amber-400 animate-pulse'
-                  }`}
-                />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onToggleEquipment();
-              }}
-              aria-label="Open Tank Equipment"
-              className="relative flex items-center gap-1.5 px-2 sm:px-3 py-2 sm:py-2.5 rounded-xl border shadow-lg text-xs sm:text-sm font-bold bg-[#18202A]/92 hover:bg-[#212B38] border-[#334155] text-slate-100 transition-all active:scale-95"
-            >
-              <Package className="w-4 h-4 text-sky-400 shrink-0" />
-              <span>Equipment</span>
-              <span className="font-mono-tabular text-[10px] text-slate-400">
-                {equippedCount}/6
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.currentTarget.blur();
-                onToggleUpgrades();
-              }}
-              aria-label="Open Tank Upgrades"
-              className={`relative flex items-center gap-1.5 px-2 sm:px-3 py-2 sm:py-2.5 rounded-xl border shadow-lg text-xs sm:text-sm font-bold transition-all active:scale-95 ${
-                hasAffordableUpgrade
-                  ? 'bg-[#1D2733]/95 hover:bg-[#253241] border-amber-400/70 text-amber-200'
-                  : 'bg-[#18202A]/92 hover:bg-[#212B38] border-[#334155] text-slate-100'
-              }`}
-            >
-              <SlidersHorizontal className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Upgrades</span>
-              {hasAffordableUpgrade && (
-                <span
-                  aria-hidden="true"
-                  className="w-2 h-2 rounded-xs bg-amber-400 shadow-sm"
-                />
-              )}
-            </button>
-          </div>
-        )}
+      {/* Compact Floating Navigation Toolbar (Landscape & Desktop; Portrait renders dedicated bar below canvas) */}
+      {phase === 'ACTIVE' && (
+        <div className="hidden sm:block landscape:block absolute bottom-2 right-2.5 z-10">
+          <BattlefieldNav
+            layout="floating"
+            activePanel={activePanel}
+            forgeStatus={forgeStatus}
+            autoForgeEnabled={autoForgeEnabled}
+            equippedCount={equippedCount}
+            unlockedSkillCount={unlockedSkillCount}
+            hasAffordableUpgrade={hasAffordableUpgrade}
+            hasAffordableCollectionUpgrade={hasAffordableCollectionUpgrade}
+            onToggleCollection={onToggleCollection}
+            onToggleForge={onToggleForge}
+            onToggleEquipment={onToggleEquipment}
+            onToggleUpgrades={onToggleUpgrades}
+          />
+        </div>
+      )}
     </div>
   );
 }

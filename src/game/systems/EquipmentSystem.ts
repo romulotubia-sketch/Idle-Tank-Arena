@@ -128,7 +128,7 @@ export class EquipmentSystem {
   private ownedItems: EquipmentItem[] = [];
   private slots: Record<EquipmentSlotType, EquipmentItem | null> =
     createEmptySlots();
-  private capacity = EQUIPMENT_INVENTORY_CAPACITY;
+  private capacity: number = EQUIPMENT_INVENTORY_CAPACITY;
   private nextAcquiredOrder = 1;
   private preferences: EquipmentPreferences = {
     ...DEFAULT_EQUIPMENT_PREFERENCES,
@@ -825,7 +825,13 @@ export class EquipmentSystem {
   }
 
   loadState(saved?: SavedEquipmentState): void {
-    this.capacity = EQUIPMENT_INVENTORY_CAPACITY;
+    const savedCapacity =
+      saved &&
+      typeof saved.capacity === 'number' &&
+      Number.isFinite(saved.capacity)
+        ? Math.max(EQUIPMENT_INVENTORY_CAPACITY, Math.floor(saved.capacity))
+        : EQUIPMENT_INVENTORY_CAPACITY;
+    this.capacity = savedCapacity;
     this.preferences = { ...DEFAULT_EQUIPMENT_PREFERENCES };
 
     if (

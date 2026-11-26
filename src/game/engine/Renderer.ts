@@ -19,6 +19,7 @@ export interface RenderSceneInput {
   showRangeRing: boolean;
   isActive: boolean;
   reducedMotion: boolean;
+  damageVignetteAlpha?: number;
 }
 
 function createSeededRng(seed: number): () => number {
@@ -29,6 +30,11 @@ function createSeededRng(seed: number): () => number {
   };
 }
 
+function hash01(seed: number, step: number): number {
+  const x = Math.sin(seed * 12.9898 + step * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 const TERRAIN_EXTENT_X = 1960;
 const TERRAIN_EXTENT_Y = 1220;
 
@@ -36,6 +42,7 @@ export class Renderer {
   private ctx: CanvasRenderingContext2D | null = null;
   private camera: Camera;
   private terrainCache: HTMLCanvasElement | null = null;
+  private damageVignetteCache: HTMLCanvasElement | null = null;
   private viewportWidth = 0;
   private viewportHeight = 0;
   private dpr = 1;
@@ -53,6 +60,9 @@ export class Renderer {
     this.ctx = context;
     if (!this.terrainCache) {
       this.buildTerrainCache(ARENA_BOUNDS);
+    }
+    if (!this.damageVignetteCache) {
+      this.buildDamageVignetteCache();
     }
     this.resize(canvas);
   }
@@ -84,8 +94,16 @@ export class Renderer {
     const ctx = this.ctx;
     if (!ctx || this.viewportWidth === 0 || this.viewportHeight === 0) return;
 
-    const { bounds, tank, enemies, projectiles, mines, effects, showRangeRing } =
-      scene;
+    const {
+      bounds,
+      tank,
+      enemies,
+      projectiles,
+      mines,
+      effects,
+      showRangeRing,
+      damageVignetteAlpha = 0,
+    } = scene;
 
     ctx.save();
     ctx.scale(this.dpr, this.dpr);
@@ -93,6 +111,7 @@ export class Renderer {
     ctx.fillStyle = '#202B1E';
     ctx.fillRect(0, 0, this.viewportWidth, this.viewportHeight);
 
+    ctx.save();
     this.camera.applyTransform(ctx);
 
     // Layer 1: Pre-baked extended military terrain
@@ -111,7 +130,7 @@ export class Renderer {
       this.drawRangeRing(ctx, tank.position.x, tank.position.y, tank.stats.range);
     }
 
-    // Layer 3: Deployed Landmines, Mortar reticles & Boss Siege Telegraphs
+    // Layer 3: Ground mines, Mortar reticles/arcs & Boss Siege Telegraphs
     this.drawMines(ctx, mines);
     this.drawMortarReticles(ctx, projectiles);
     this.drawBossTelegraphs(ctx, enemies);
@@ -120,11 +139,56 @@ export class Renderer {
     this.drawEnemies(ctx, enemies);
     this.drawPlayerTank(ctx, tank);
 
-    // Layer 5: Projectiles & Combat VFX
+    // Layer 5: Projectiles & Combat VFX (explosions, beams, arcs, particles)
     this.drawProjectiles(ctx, projectiles);
-    this.drawEffects(ctx, effects);
+    this.drawWorldEffects(ctx, effects);
+
+    // Layer 6: Enemy Health Bars & Floating Damage Numbers (always crisp and readable above VFX)
+    this.drawEnemyHealthBars(ctx, enemies);
+    this.drawDamageNumbers(ctx, effects);
 
     ctx.restore();
+
+    // Layer 7 (Screen-space): Restrained edge damage feedback vignette
+    if (damageVignetteAlpha > 0.01 && this.damageVignetteCache) {
+      ctx.save();
+      ctx.globalAlpha = damageVignetteAlpha;
+      ctx.drawImage(
+        this.damageVignetteCache,
+        0,
+        0,
+        this.viewportWidth,
+        this.viewportHeight
+      );
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  private buildDamageVignetteCache(): void {
+    if (typeof document === 'undefined') return;
+    const size = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const grad = ctx.createRadialGradient(
+      size * 0.5,
+      size * 0.5,
+      size * 0.34,
+      size * 0.5,
+      size * 0.5,
+      size * 0.72
+    );
+    grad.addColorStop(0, 'rgba(225, 29, 72, 0)');
+    grad.addColorStop(0.65, 'rgba(225, 29, 72, 0.25)');
+    grad.addColorStop(1, 'rgba(225, 29, 72, 0.92)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    this.damageVignetteCache = canvas;
   }
 
   private drawCachedTerrain(ctx: CanvasRenderingContext2D, bounds: ArenaBounds): void {
@@ -460,20 +524,32 @@ export class Renderer {
     ctx: CanvasRenderingContext2D,
     mines: readonly LandmineInstance[]
   ): void {
+    const nowSec = performance.now() * 0.001;
     for (let i = 0; i < mines.length; i++) {
       const m = mines[i];
       if (!m.active) continue;
 
+      const isArmed = m.armTimer <= 0;
+      const pulse = isArmed ? 0.5 + 0.5 * Math.sin(nowSec * 6 + m.uid) : 0;
+
       ctx.save();
       ctx.translate(m.x, m.y);
 
-      // Subtle trigger zone ring when armed
-      if (m.armTimer <= 0) {
-        ctx.strokeStyle = 'rgba(163, 230, 53, 0.22)';
-        ctx.lineWidth = 1;
+      // Ground shadow
+      ctx.fillStyle = 'rgba(8, 10, 12, 0.38)';
+      ctx.beginPath();
+      ctx.arc(1.5, 2, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Trigger zone pulse ring when armed
+      if (isArmed) {
+        ctx.strokeStyle = `rgba(163, 230, 53, ${0.14 + pulse * 0.16})`;
+        ctx.lineWidth = 1.1;
+        ctx.setLineDash([4, 4]);
         ctx.beginPath();
         ctx.arc(0, 0, m.triggerRadius, 0, Math.PI * 2);
         ctx.stroke();
+        ctx.setLineDash([]);
       }
 
       // Octagonal metallic mine casing
@@ -483,8 +559,8 @@ export class Renderer {
       ctx.beginPath();
       for (let v = 0; v < 8; v++) {
         const a = (v * Math.PI) / 4 + Math.PI / 8;
-        const px = Math.cos(a) * 9;
-        const py = Math.sin(a) * 9;
+        const px = Math.cos(a) * 9.5;
+        const py = Math.sin(a) * 9.5;
         if (v === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
@@ -492,15 +568,24 @@ export class Renderer {
       ctx.fill();
       ctx.stroke();
 
+      // Caution rim prongs
+      ctx.fillStyle = isArmed ? '#84CC16' : '#D97706';
+      ctx.fillRect(-7, -1, 2.5, 2);
+      ctx.fillRect(4.5, -1, 2.5, 2);
+
       // Pressure plate + armed indicator LED
       ctx.fillStyle = '#4B584E';
       ctx.beginPath();
       ctx.arc(0, 0, 5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = m.armTimer > 0 ? '#F59E0B' : '#A3E635';
+      ctx.fillStyle = isArmed
+        ? pulse > 0.5
+          ? '#BEF264'
+          : '#A3E635'
+        : '#F59E0B';
       ctx.beginPath();
-      ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
+      ctx.arc(0, 0, isArmed ? 2.4 + pulse * 0.5 : 2.1, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.restore();
@@ -521,17 +606,39 @@ export class Renderer {
           ? Math.min(1, p.flightElapsed / p.flightDuration)
           : 0.5;
 
+      // Visible parabolic trajectory arc preview
+      if (p.startX !== undefined && p.startY !== undefined) {
+        const midX = (p.startX + p.targetX) * 0.5;
+        const midY = (p.startY + p.targetY) * 0.5 - 116;
+        ctx.save();
+        ctx.strokeStyle = `rgba(251, 146, 60, ${0.22 + (1 - t) * 0.16})`;
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([5, 6]);
+        ctx.beginPath();
+        ctx.moveTo(p.startX, p.startY);
+        ctx.quadraticCurveTo(midX, midY, p.targetX, p.targetY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
       ctx.save();
       ctx.translate(p.targetX, p.targetY);
-      ctx.strokeStyle = `rgba(249, 115, 22, ${0.35 + t * 0.45})`;
+      ctx.fillStyle = `rgba(249, 115, 22, ${0.06 + t * 0.12})`;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.aoeRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = `rgba(249, 115, 22, ${0.4 + t * 0.48})`;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
       ctx.arc(0, 0, p.aoeRadius, 0, Math.PI * 2);
       ctx.stroke();
 
-      // Contracting inner bullseye
+      // Contracting inner timing bullseye
       ctx.setLineDash([]);
+      ctx.strokeStyle = `rgba(253, 186, 116, ${0.55 + t * 0.4})`;
       ctx.beginPath();
       ctx.arc(0, 0, Math.max(4, p.aoeRadius * (1 - t)), 0, Math.PI * 2);
       ctx.stroke();
@@ -573,21 +680,28 @@ export class Renderer {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Ground hazard zone
+      // Ground hazard zone (exact damage boundary)
       ctx.translate(e.telegraphX, e.telegraphY);
-      ctx.fillStyle = `rgba(225, 29, 72, ${0.12 + progress * 0.2})`;
+      ctx.fillStyle = `rgba(225, 29, 72, ${0.14 + progress * 0.22})`;
       ctx.beginPath();
       ctx.arc(0, 0, e.telegraphRadius, 0, Math.PI * 2);
       ctx.fill();
 
       // Expanding timing ring (matches outer edge right on impact)
-      ctx.fillStyle = 'rgba(244, 63, 94, 0.16)';
+      ctx.fillStyle = 'rgba(244, 63, 94, 0.2)';
       ctx.beginPath();
       ctx.arc(0, 0, e.telegraphRadius * progress, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = `rgba(251, 113, 133, ${0.55 + progress * 0.4})`;
-      ctx.lineWidth = 2.2;
+      // Solid faint rim + dashed warning ring for unambiguous dodge boundary
+      ctx.strokeStyle = `rgba(251, 113, 133, ${0.35 + progress * 0.35})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, e.telegraphRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(253, 164, 175, ${0.65 + progress * 0.35})`;
+      ctx.lineWidth = 2.4;
       ctx.setLineDash([8, 5]);
       ctx.beginPath();
       ctx.arc(0, 0, e.telegraphRadius, 0, Math.PI * 2);
@@ -605,147 +719,501 @@ export class Renderer {
     for (let i = 0; i < enemies.length; i++) {
       const enemy = enemies[i];
       ctx.save();
-      ctx.translate(enemy.position.x, enemy.position.y);
+      ctx.translate(
+        enemy.position.x + (enemy.hitReactionX || 0),
+        enemy.position.y + (enemy.hitReactionY || 0)
+      );
 
       if (enemy.isDying) {
         const t = Math.max(0, enemy.deathTimer / enemy.deathDuration);
         ctx.globalAlpha = t;
-        const shrink = 0.65 + 0.35 * t;
+        const shrink = 0.58 + 0.42 * t;
         ctx.scale(shrink, shrink);
+        ctx.rotate((1 - t) * (enemy.uid % 2 === 0 ? 0.28 : -0.28));
       }
 
       if (enemy.definitionId === 'siege_boss') {
         this.drawSiegeBoss(ctx, enemy);
-      } else if (enemy.definitionId === 'heavy_crawler') {
-        this.drawHeavyCrawler(ctx, enemy);
+      } else if (enemy.definitionId === 'heavy_tank') {
+        this.drawHeavyTank(ctx, enemy);
+      } else if (enemy.definitionId === 'artillery') {
+        this.drawArtillery(ctx, enemy);
+      } else if (enemy.definitionId === 'assault_tank') {
+        this.drawAssaultTank(ctx, enemy);
+      } else if (enemy.definitionId === 'runner') {
+        this.drawRunner(ctx, enemy);
       } else {
-        this.drawScoutBuggy(ctx, enemy);
-      }
-
-      if (!enemy.isDying) {
-        this.drawEnemyHealthBar(ctx, enemy);
+        this.drawScout(ctx, enemy);
       }
 
       ctx.restore();
     }
   }
 
-  private drawScoutBuggy(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawEnemyHealthBars(
+    ctx: CanvasRenderingContext2D,
+    enemies: readonly EnemyInstance[]
+  ): void {
+    for (let i = 0; i < enemies.length; i++) {
+      const enemy = enemies[i];
+      if (enemy.isDying) continue;
+
+      const xCenter = enemy.position.x + (enemy.hitReactionX || 0);
+      const yCenter = enemy.position.y + (enemy.hitReactionY || 0);
+      const barW = enemy.isBoss
+        ? 54
+        : enemy.definitionId === 'heavy_tank'
+          ? 40
+          : enemy.definitionId === 'assault_tank' || enemy.definitionId === 'artillery'
+            ? 32
+            : 26;
+      const barH = enemy.isBoss ? 5.5 : enemy.definitionId === 'heavy_tank' ? 4.5 : 4;
+      const x = xCenter - barW * 0.5;
+      const y = yCenter - enemy.radius - 14;
+      const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
+
+      ctx.fillStyle = 'rgba(10, 12, 16, 0.9)';
+      ctx.fillRect(x - 1, y - 1, barW + 2, barH + 2);
+
+      ctx.fillStyle = enemy.isBoss
+        ? '#F43F5E'
+        : enemy.definitionId === 'artillery'
+          ? '#F59E0B'
+          : enemy.definitionId === 'runner'
+            ? '#EC4899'
+            : '#EF4444';
+      ctx.fillRect(x, y, barW * ratio, barH);
+    }
+  }
+
+  private drawScout(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+    const isHit = enemy.hitFlashTimer > 0;
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
 
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.42)';
+    // Compact ground shadow
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.38)';
     ctx.beginPath();
-    ctx.roundRect(-13, -15, 28, 34, 5);
+    ctx.roundRect(-12, -13, 24, 28, 5);
     ctx.fill();
 
-    ctx.fillStyle = '#181A1E';
-    ctx.strokeStyle = '#0B0C0E';
+    // 4 exposed agile off-road tires
+    ctx.fillStyle = '#16181D';
+    ctx.strokeStyle = '#090A0C';
     ctx.lineWidth = 1;
     const wheels = [
-      [-14, -12],
-      [9, -12],
-      [-14, 6],
-      [9, 6],
+      [-12.5, -10],
+      [8.5, -10],
+      [-12.5, 4],
+      [8.5, 4],
     ];
     for (const [wx, wy] of wheels) {
-      ctx.fillRect(wx, wy, 5, 8);
-      ctx.strokeRect(wx, wy, 5, 8);
+      ctx.fillRect(wx, wy, 4, 7);
+      ctx.strokeRect(wx, wy, 4, 7);
     }
 
-    ctx.fillStyle = enemy.hitFlashTimer > 0 ? '#FCA5A5' : '#8C3B3B';
-    ctx.strokeStyle = '#2A1212';
-    ctx.lineWidth = 1.5;
+    // Twin whip recon antennas at rear
+    ctx.strokeStyle = '#94A3B8';
+    ctx.lineWidth = 1.1;
     ctx.beginPath();
-    ctx.moveTo(-8, -15);
-    ctx.lineTo(8, -15);
-    ctx.lineTo(11, 4);
-    ctx.lineTo(9, 15);
-    ctx.lineTo(-9, 15);
-    ctx.lineTo(-11, 4);
+    ctx.moveTo(-5, 11);
+    ctx.lineTo(-8, 19);
+    ctx.moveTo(5, 11);
+    ctx.lineTo(8, 19);
+    ctx.stroke();
+
+    // Narrow tapered buggy chassis
+    ctx.fillStyle = isHit ? '#FCA5A5' : '#7C3A32';
+    ctx.strokeStyle = '#26100E';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-6.5, -13);
+    ctx.lineTo(6.5, -13);
+    ctx.lineTo(9, 3);
+    ctx.lineTo(7, 13);
+    ctx.lineTo(-7, 13);
+    ctx.lineTo(-9, 3);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = enemy.hitFlashTimer > 0 ? '#FEE2E2' : '#B44B4B';
-    ctx.fillRect(-5, -13, 10, 9);
+    // Cyan recon optics slit
+    ctx.fillStyle = isHit ? '#FEF2F2' : '#38BDF8';
+    ctx.fillRect(-4, -10.5, 8, 2.5);
 
-    ctx.fillStyle = '#F87171';
-    ctx.fillRect(-3, 9, 6, 3);
+    // Short light autocannon
+    ctx.fillStyle = '#334155';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 1.1;
+    ctx.fillRect(-1.5, -20, 3, 13);
+    ctx.strokeRect(-1.5, -20, 3, 13);
 
-    ctx.fillStyle = '#333840';
-    ctx.strokeStyle = '#14171A';
-    ctx.lineWidth = 1.2;
-    ctx.fillRect(-2, -23, 4, 15);
-    ctx.strokeRect(-2, -23, 4, 15);
-
-    ctx.fillStyle = '#4B525E';
+    // Small compact recon turret
+    ctx.fillStyle = isHit ? '#FEE2E2' : '#A84A3E';
+    ctx.strokeStyle = '#26100E';
     ctx.beginPath();
-    ctx.roundRect(-6, -6, 12, 11, 3);
+    ctx.roundRect(-5, -5, 10, 9, 3);
     ctx.fill();
     ctx.stroke();
 
     ctx.restore();
   }
 
-  private drawHeavyCrawler(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+  private drawAssaultTank(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+    const isHit = enemy.hitFlashTimer > 0;
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
 
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.48)';
+    // Ground shadow
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.44)';
     ctx.beginPath();
-    ctx.roundRect(-19, -20, 40, 44, 6);
+    ctx.roundRect(-15, -17, 30, 36, 5);
     ctx.fill();
 
-    ctx.fillStyle = '#1B1E22';
-    ctx.strokeStyle = '#0D0E10';
+    // Side armored treads
+    ctx.fillStyle = '#181B20';
+    ctx.strokeStyle = '#0B0C0E';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.roundRect(-14.5, -16, 6, 32, 2);
+    ctx.roundRect(8.5, -16, 6, 32, 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Medium battle tank hull
+    ctx.fillStyle = isHit ? '#FCA5A5' : '#8F2E36';
+    ctx.strokeStyle = '#280C10';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.roundRect(-19, -20, 8, 40, 2);
-    ctx.roundRect(11, -20, 8, 40, 2);
+    ctx.roundRect(-10, -15, 20, 31, 3);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = enemy.hitFlashTimer > 0 ? '#FCA5A5' : '#6E2D35';
-    ctx.strokeStyle = '#240E11';
-    ctx.lineWidth = 1.6;
+    // Sloped front glacis trim + engine deck vents
+    ctx.fillStyle = isHit ? '#FECACA' : '#B53F48';
+    ctx.fillRect(-7, -13, 14, 7);
+    ctx.fillStyle = '#2D1115';
+    ctx.fillRect(-6, 8, 12, 5);
+
+    // Medium main gun barrel + collar
+    ctx.fillStyle = '#374151';
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.roundRect(-13, -17, 26, 35, 3);
+    ctx.roundRect(-2.4, -27, 4.8, 18, 1.5);
     ctx.fill();
     ctx.stroke();
+    ctx.fillStyle = '#1F2937';
+    ctx.fillRect(-3.5, -28, 7, 3.5);
 
-    ctx.fillStyle = '#3B4048';
-    ctx.strokeStyle = '#141619';
+    // Centered hexagonal combat turret
+    ctx.fillStyle = isHit ? '#FEE2E2' : '#A93842';
+    ctx.strokeStyle = '#280C10';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.roundRect(-3, -31, 6, 20, 1.5);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = enemy.hitFlashTimer > 0 ? '#FEE2E2' : '#9E3E47';
-    ctx.strokeStyle = '#2A1013';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(-8, -10);
-    ctx.lineTo(8, -10);
-    ctx.lineTo(11, 4);
-    ctx.lineTo(7, 11);
-    ctx.lineTo(-7, 11);
-    ctx.lineTo(-11, 4);
+    ctx.moveTo(-6, -8);
+    ctx.lineTo(6, -8);
+    ctx.lineTo(9, 2);
+    ctx.lineTo(6, 9);
+    ctx.lineTo(-6, 9);
+    ctx.lineTo(-9, 2);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#FB7185';
-    ctx.fillRect(-4, 5, 8, 2.5);
+    // Crimson tactical stripe
+    ctx.fillStyle = '#F87171';
+    ctx.fillRect(-4, 4, 8, 2);
+
+    ctx.restore();
+  }
+
+  private drawHeavyTank(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+    const isHit = enemy.hitFlashTimer > 0;
+    ctx.save();
+    ctx.rotate(enemy.angle + Math.PI / 2);
+
+    // Heavy shadow
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.52)';
+    ctx.beginPath();
+    ctx.roundRect(-21, -22, 42, 46, 6);
+    ctx.fill();
+
+    // Thick armored side track skirts
+    ctx.fillStyle = '#191C21';
+    ctx.strokeStyle = '#090A0C';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.roundRect(-20, -21, 9, 42, 2.5);
+    ctx.roundRect(11, -21, 9, 42, 2.5);
+    ctx.fill();
+    ctx.stroke();
+
+    // Broad armored hull
+    ctx.fillStyle = isHit ? '#FCA5A5' : '#5E232B';
+    ctx.strokeStyle = '#200B0E';
+    ctx.lineWidth = 1.7;
+    ctx.beginPath();
+    ctx.roundRect(-14, -19, 28, 39, 3.5);
+    ctx.fill();
+    ctx.stroke();
+
+    // Front heavy ramming plow / bumper
+    ctx.fillStyle = '#374151';
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(-14, -18);
+    ctx.lineTo(0, -23);
+    ctx.lineTo(14, -18);
+    ctx.lineTo(12, -14);
+    ctx.lineTo(-12, -14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Riveted upper armor plate + rear exhaust vents
+    ctx.fillStyle = isHit ? '#FECACA' : '#7C2D37';
+    ctx.fillRect(-10, -11, 20, 22);
+    ctx.fillStyle = '#1E1B1E';
+    ctx.fillRect(-9, 13, 18, 4);
+
+    // Heavy wide cannon barrel
+    ctx.fillStyle = '#334155';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(-3.6, -34, 7.2, 23, 1.5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(-5, -35.5, 10, 4.5);
+
+    // Reinforced wide juggernaut turret
+    ctx.fillStyle = isHit ? '#FEE2E2' : '#9E3743';
+    ctx.strokeStyle = '#240C10';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-10, -11);
+    ctx.lineTo(10, -11);
+    ctx.lineTo(13, 2);
+    ctx.lineTo(9, 12);
+    ctx.lineTo(-9, 12);
+    ctx.lineTo(-13, 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Hazard trim bar
+    ctx.fillStyle = '#FB923C';
+    ctx.fillRect(-6, 6, 12, 3);
+
+    ctx.restore();
+  }
+
+  private drawArtillery(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+    const isHit = enemy.hitFlashTimer > 0;
+    ctx.save();
+    ctx.rotate(enemy.angle + Math.PI / 2);
+
+    // Ground shadow
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.44)';
+    ctx.beginPath();
+    ctx.roundRect(-16, -16, 32, 38, 5);
+    ctx.fill();
+
+    // Deployed twin rear recoil stabilizer spades (distinct SPG profile)
+    ctx.fillStyle = '#475569';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-9, 12);
+    ctx.lineTo(-16, 20);
+    ctx.lineTo(-11, 22);
+    ctx.lineTo(-5, 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(9, 12);
+    ctx.lineTo(16, 20);
+    ctx.lineTo(11, 22);
+    ctx.lineTo(5, 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Tracks
+    ctx.fillStyle = '#1C1917';
+    ctx.strokeStyle = '#0C0A09';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.roundRect(-15, -15, 6, 30, 2);
+    ctx.roundRect(9, -15, 6, 30, 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Rectangular SPG hull (desert-ochre / siege amber)
+    ctx.fillStyle = isHit ? '#FDE68A' : '#854D27';
+    ctx.strokeStyle = '#291709';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(-10, -14, 20, 29, 2.5);
+    ctx.fill();
+    ctx.stroke();
+
+    // Forward driver cab / sighting optics
+    ctx.fillStyle = isHit ? '#FEF3C7' : '#A16234';
+    ctx.fillRect(-7, -12, 14, 8);
+    ctx.fillStyle = '#FBBF24';
+    ctx.fillRect(-4, -10, 8, 2.5);
+
+    // Extra-long elevated siege gun barrel + prominent muzzle brake
+    ctx.fillStyle = '#44403C';
+    ctx.strokeStyle = '#1C1917';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.roundRect(-2.4, -36, 4.8, 34, 1.5);
+    ctx.fill();
+    ctx.stroke();
+
+    // Slotted artillery muzzle brake
+    ctx.fillStyle = '#292524';
+    ctx.strokeStyle = '#0C0A09';
+    ctx.fillRect(-4.5, -39, 9, 4.5);
+    ctx.strokeRect(-4.5, -39, 9, 4.5);
+
+    // Rear-mounted open gun cradle
+    ctx.fillStyle = isHit ? '#FEF3C7' : '#B46934';
+    ctx.strokeStyle = '#291709';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.roundRect(-7, -1, 14, 13, 2.5);
+    ctx.fill();
+    ctx.stroke();
+
+    // Siege breech glow accent
+    ctx.fillStyle = '#F59E0B';
+    ctx.fillRect(-3, 7, 6, 3);
+
+    ctx.restore();
+  }
+
+  private drawRunner(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
+    const isHit = enemy.hitFlashTimer > 0;
+    ctx.save();
+    ctx.rotate(enemy.angle + Math.PI / 2);
+
+    // Fiery rear booster exhaust plume
+    ctx.fillStyle = 'rgba(249, 115, 22, 0.72)';
+    ctx.beginPath();
+    ctx.moveTo(-4, 12);
+    ctx.lineTo(0, 22);
+    ctx.lineTo(4, 12);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#FDE047';
+    ctx.beginPath();
+    ctx.moveTo(-2, 12);
+    ctx.lineTo(0, 17);
+    ctx.lineTo(2, 12);
+    ctx.closePath();
+    ctx.fill();
+
+    // Sleek shadow
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.38)';
+    ctx.beginPath();
+    ctx.moveTo(0, -18);
+    ctx.lineTo(12, 12);
+    ctx.lineTo(-12, 12);
+    ctx.closePath();
+    ctx.fill();
+
+    // Flared rear drive wheels
+    ctx.fillStyle = '#18181B';
+    ctx.strokeStyle = '#09090B';
+    ctx.lineWidth = 1.1;
+    ctx.fillRect(-11.5, 3, 4.5, 9);
+    ctx.strokeRect(-11.5, 3, 4.5, 9);
+    ctx.fillRect(7, 3, 4.5, 9);
+    ctx.strokeRect(7, 3, 4.5, 9);
+
+    // Forward twin steel ramming blades (melee identity)
+    ctx.fillStyle = '#E2E8F0';
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(-5, -10);
+    ctx.lineTo(-7, -20);
+    ctx.lineTo(-1.5, -13);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(5, -10);
+    ctx.lineTo(7, -20);
+    ctx.lineTo(1.5, -13);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Narrow dart chassis
+    ctx.fillStyle = isHit ? '#FBCFE8' : '#9D174D';
+    ctx.strokeStyle = '#3B0722';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(0, -16);
+    ctx.lineTo(9, 4);
+    ctx.lineTo(7, 13);
+    ctx.lineTo(-7, 13);
+    ctx.lineTo(-9, 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Magenta racing dorsal spine
+    ctx.fillStyle = isHit ? '#FCE7F3' : '#EC4899';
+    ctx.beginPath();
+    ctx.moveTo(0, -11);
+    ctx.lineTo(4, 9);
+    ctx.lineTo(-4, 9);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.restore();
   }
 
   private drawSiegeBoss(ctx: CanvasRenderingContext2D, enemy: EnemyInstance): void {
-    const isCharging = Boolean(enemy.telegraphTimer && enemy.telegraphTimer > 0);
+    const isChargingSiege = Boolean(enemy.telegraphTimer && enemy.telegraphTimer > 0);
+    const isChargingBurst = Boolean(
+      (enemy.burstChargeTimer && enemy.burstChargeTimer > 0) ||
+        (enemy.burstShotsRemaining && enemy.burstShotsRemaining > 0)
+    );
+    const isCharging = isChargingSiege || isChargingBurst;
+    const isIntro = Boolean(enemy.introTimer && enemy.introTimer > 0 && enemy.introDuration);
+
     ctx.save();
     ctx.rotate(enemy.angle + Math.PI / 2);
+
+    // Subtle crimson command aura ring so boss is immediately distinct
+    ctx.strokeStyle = isChargingBurst
+      ? 'rgba(251, 191, 36, 0.48)'
+      : 'rgba(244, 63, 94, 0.36)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 42, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Boss arrival intro ring
+    if (isIntro && enemy.introTimer && enemy.introDuration) {
+      const introT = Math.max(0, Math.min(1, enemy.introTimer / enemy.introDuration));
+      ctx.strokeStyle = `rgba(251, 113, 133, ${0.8 * introT})`;
+      ctx.lineWidth = 2.8;
+      ctx.beginPath();
+      ctx.arc(0, 0, 44 + (1 - introT) * 34, 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     // Heavy ground shadow
     ctx.fillStyle = 'rgba(8, 10, 12, 0.55)';
@@ -808,8 +1276,12 @@ export class Renderer {
     ctx.fill();
     ctx.stroke();
 
-    // Muzzle tips (glow crimson while charging siege strike)
-    ctx.fillStyle = isCharging ? '#F43F5E' : '#1F242C';
+    // Muzzle tips (glow crimson while charging siege strike or gold-orange during burst)
+    ctx.fillStyle = isChargingBurst
+      ? '#FBBF24'
+      : isChargingSiege
+        ? '#F43F5E'
+        : '#1F242C';
     ctx.fillRect(-11, -46, 8, 4);
     ctx.fillRect(3, -46, 8, 4);
 
@@ -829,7 +1301,11 @@ export class Renderer {
     ctx.stroke();
 
     // Commander turret hatch & glowing siege core
-    ctx.fillStyle = isCharging ? '#FECDD3' : '#F43F5E';
+    ctx.fillStyle = isChargingBurst
+      ? '#FDE047'
+      : isChargingSiege
+        ? '#FECDD3'
+        : '#F43F5E';
     ctx.strokeStyle = '#1E0B10';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
@@ -840,38 +1316,40 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawEnemyHealthBar(
-    ctx: CanvasRenderingContext2D,
-    enemy: EnemyInstance
-  ): void {
-    const barW = enemy.isBoss
-      ? 54
-      : enemy.definitionId === 'heavy_crawler'
-        ? 34
-        : 28;
-    const barH = enemy.isBoss ? 5.5 : 4;
-    const x = -barW * 0.5;
-    const y = -enemy.radius - 14;
-    const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
-
-    ctx.fillStyle = 'rgba(10, 12, 16, 0.88)';
-    ctx.fillRect(x - 1, y - 1, barW + 2, barH + 2);
-
-    ctx.fillStyle = enemy.isBoss ? '#F43F5E' : '#EF4444';
-    ctx.fillRect(x, y, barW * ratio, barH);
-  }
-
   private drawPlayerTank(ctx: CanvasRenderingContext2D, tank: PlayerTankState): void {
     ctx.save();
-    ctx.translate(tank.position.x, tank.position.y);
+    ctx.translate(
+      tank.position.x + (tank.bodyRecoilX || 0),
+      tank.position.y + (tank.bodyRecoilY || 0)
+    );
 
     ctx.fillStyle = 'rgba(10, 12, 10, 0.46)';
     ctx.beginPath();
     ctx.roundRect(-29, -27, 62, 62, 10);
     ctx.fill();
 
-    this.drawTankHull(ctx, tank.hullAngle, tank.hitFlashTimer > 0, tank.isMoving, tank.idlePhase);
-    this.drawTankTurret(ctx, tank.turretAngle, tank.recoilOffset, tank.hitFlashTimer > 0);
+    this.drawTankHull(
+      ctx,
+      tank.hullAngle,
+      tank.hitFlashTimer > 0,
+      tank.isMoving,
+      tank.idlePhase
+    );
+    this.drawTankTurret(
+      ctx,
+      tank.turretAngle,
+      tank.recoilOffset,
+      tank.hitFlashTimer > 0
+    );
+
+    if (tank.hitFlashTimer > 0) {
+      const flashAlpha = Math.min(0.65, (tank.hitFlashTimer / 0.13) * 0.65);
+      ctx.strokeStyle = `rgba(251, 113, 133, ${flashAlpha})`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 32, 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     ctx.restore();
   }
@@ -1085,32 +1563,62 @@ export class Renderer {
       const tier = Math.max(1, Math.min(5, p.visualTier ?? 1));
 
       if (p.kind === 'mg_bullet') {
-        // Rapid tracer dart (longer & brighter at higher levels)
-        const trailLen = 11 + tier * 2;
+        // High-speed bright tracer + pointed brass slug
+        const trailLen = 15 + tier * 2.2;
         ctx.fillStyle =
-          tier >= 4 ? 'rgba(253, 224, 71, 0.85)' : 'rgba(250, 204, 21, 0.6)';
-        ctx.fillRect(-trailLen - 2, -1.2, trailLen, 2.4);
-        ctx.fillStyle = tier >= 4 ? '#FEF9C3' : '#FEF08A';
+          tier >= 4 ? 'rgba(254, 240, 138, 0.36)' : 'rgba(250, 204, 21, 0.28)';
+        ctx.fillRect(-trailLen - 4, -1.7, trailLen, 3.4);
+
+        ctx.fillStyle =
+          tier >= 4 ? 'rgba(254, 249, 195, 0.88)' : 'rgba(253, 224, 71, 0.78)';
+        ctx.fillRect(-trailLen * 0.7, -0.9, trailLen * 0.7, 1.8);
+
+        ctx.fillStyle = '#FEF9C3';
         ctx.beginPath();
-        ctx.moveTo(6 + tier * 0.5, 0);
-        ctx.lineTo(-3, -1.8);
-        ctx.lineTo(-3, 1.8);
+        ctx.moveTo(6.5 + tier * 0.4, 0);
+        ctx.lineTo(0, -1.9);
+        ctx.lineTo(-4, -1.4);
+        ctx.lineTo(-4, 1.4);
+        ctx.lineTo(0, 1.9);
         ctx.closePath();
         ctx.fill();
       } else if (p.kind === 'rocket') {
         const rocketScale = 1 + (tier - 1) * 0.08;
         ctx.scale(rocketScale, rocketScale);
-        // Exhaust flame tail
-        ctx.fillStyle = tier >= 4 ? 'rgba(251, 113, 133, 0.92)' : 'rgba(251, 146, 60, 0.85)';
+
+        // Flickering twin-layer exhaust plume
+        ctx.fillStyle =
+          tier >= 4 ? 'rgba(251, 113, 133, 0.75)' : 'rgba(249, 115, 22, 0.78)';
         ctx.beginPath();
-        ctx.moveTo(-6, 0);
-        ctx.lineTo(-18 - tier * 1.5, -3);
+        ctx.moveTo(-6, -2);
+        ctx.lineTo(-20 - tier * 1.8, -3.5);
         ctx.lineTo(-15, 0);
-        ctx.lineTo(-18 - tier * 1.5, 3);
+        ctx.lineTo(-20 - tier * 1.8, 3.5);
+        ctx.lineTo(-6, 2);
         ctx.closePath();
         ctx.fill();
 
-        // Finned warhead
+        ctx.fillStyle = '#FEF08A';
+        ctx.beginPath();
+        ctx.moveTo(-6, -1.1);
+        ctx.lineTo(-13, 0);
+        ctx.lineTo(-6, 1.1);
+        ctx.closePath();
+        ctx.fill();
+
+        // Swept stabilizing tail fins
+        ctx.fillStyle = '#475569';
+        ctx.beginPath();
+        ctx.moveTo(-4, -2.5);
+        ctx.lineTo(-8, -5.2);
+        ctx.lineTo(-8, -2.2);
+        ctx.moveTo(-4, 2.5);
+        ctx.lineTo(-8, 5.2);
+        ctx.lineTo(-8, 2.2);
+        ctx.closePath();
+        ctx.fill();
+
+        // Rocket fuselage
         ctx.fillStyle = '#E2E8F0';
         ctx.strokeStyle = '#334155';
         ctx.lineWidth = 1;
@@ -1119,56 +1627,162 @@ export class Renderer {
         ctx.fill();
         ctx.stroke();
 
+        // Warhead band + nose cone
         ctx.fillStyle = tier >= 4 ? '#FB7185' : '#F43F5E';
         ctx.beginPath();
-        ctx.moveTo(9, 0);
+        ctx.moveTo(10, 0);
         ctx.lineTo(3, -3.2);
         ctx.lineTo(3, 3.2);
         ctx.closePath();
         ctx.fill();
       } else if (p.kind === 'rail_slug') {
-        // Hyper-velocity cyan slug scaled by tier
+        // Hyper-velocity ionized chevron + streak
         const slugScale = 1 + (tier - 1) * 0.1;
         ctx.scale(slugScale, slugScale);
-        ctx.fillStyle = tier >= 4 ? 'rgba(103, 232, 249, 0.6)' : 'rgba(34, 211, 238, 0.45)';
-        ctx.fillRect(-26 - tier * 2, -3, 26 + tier * 2, 6);
+
+        ctx.fillStyle = 'rgba(34, 211, 238, 0.34)';
+        ctx.fillRect(-32 - tier * 3, -3.4, 32 + tier * 3, 6.8);
+
+        ctx.fillStyle = 'rgba(165, 243, 252, 0.72)';
+        ctx.fillRect(-20 - tier * 2, -1.4, 20 + tier * 2, 2.8);
+
         ctx.fillStyle = '#ECFEFF';
         ctx.strokeStyle = tier >= 4 ? '#22D3EE' : '#06B6D4';
         ctx.lineWidth = 1.2;
         ctx.beginPath();
-        ctx.moveTo(12, 0);
-        ctx.lineTo(2, -3);
-        ctx.lineTo(-10, -2);
-        ctx.lineTo(-10, 2);
-        ctx.lineTo(2, 3);
+        ctx.moveTo(13, 0);
+        ctx.lineTo(2, -3.4);
+        ctx.lineTo(-10, -2.1);
+        ctx.lineTo(-6, 0);
+        ctx.lineTo(-10, 2.1);
+        ctx.lineTo(2, 3.4);
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+      } else if (p.kind === 'enemy_artillery_shell') {
+        // Hostile glowing crimson-amber artillery shell with bright readable outline
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.34)';
+        ctx.beginPath();
+        ctx.moveTo(-22, 0);
+        ctx.lineTo(-4, -3.5);
+        ctx.lineTo(-4, 3.5);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(251, 146, 60, 0.78)';
+        ctx.beginPath();
+        ctx.moveTo(-14, 0);
+        ctx.lineTo(-3, -1.7);
+        ctx.lineTo(-3, 1.7);
+        ctx.closePath();
+        ctx.fill();
+
+        // Outer hostile crimson aura ring
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.28)';
+        ctx.beginPath();
+        ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pointed artillery shell body
+        ctx.fillStyle = '#EF4444';
+        ctx.strokeStyle = '#7F1D1D';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(9, 0);
+        ctx.lineTo(2, -3.2);
+        ctx.lineTo(-6, -2.4);
+        ctx.lineTo(-6, 2.4);
+        ctx.lineTo(2, 3.2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Hot amber core
+        ctx.fillStyle = '#FEF08A';
+        ctx.beginPath();
+        ctx.arc(1.5, 0, 2.1, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === 'enemy_boss_shell') {
+        // Heavy Boss Siege Shell: larger scale, dark crimson-gold armor casing + luminous rose aura
+        const scale = tier >= 2 ? 1.24 : 1.04;
+        ctx.scale(scale, scale);
+
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.36)';
+        ctx.beginPath();
+        ctx.moveTo(-26, 0);
+        ctx.lineTo(-5, -4.5);
+        ctx.lineTo(-5, 4.5);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(253, 224, 71, 0.8)';
+        ctx.beginPath();
+        ctx.moveTo(-15, 0);
+        ctx.lineTo(-3, -1.8);
+        ctx.lineTo(-3, 1.8);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(225, 29, 72, 0.3)';
+        ctx.beginPath();
+        ctx.arc(0, 0, 8.8, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#E11D48';
+        ctx.strokeStyle = '#4C0519';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(10.5, 0);
+        ctx.lineTo(2.5, -3.8);
+        ctx.lineTo(-7, -2.8);
+        ctx.lineTo(-7, 2.8);
+        ctx.lineTo(2.5, 3.8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#FEF08A';
+        ctx.beginPath();
+        ctx.arc(2, 0, 2.5, 0, Math.PI * 2);
+        ctx.fill();
       } else {
-        // 'tank_shell' and 'heavy_shell' (Cannon skill scales appearance cleanly with tier)
+        // 'tank_shell' and 'heavy_shell' detailed AP ballistic round + layered wake
         const isHeavy = p.kind === 'heavy_shell';
         const isCrit = Boolean(p.isCrit);
         const scale = isHeavy
-          ? 1.2 + (tier - 1) * 0.12
+          ? 1.18 + (tier - 1) * 0.11
           : isCrit
-            ? 1.22
-            : 1;
+            ? 1.24
+            : 1.04;
         ctx.scale(scale, scale);
 
-        const trailLen = isHeavy ? 22 + (tier - 1) * 4 : isCrit ? 28 : 22;
-        const grad = ctx.createLinearGradient(-trailLen, 0, 6, 0);
-        grad.addColorStop(0, 'rgba(251, 191, 36, 0)');
-        grad.addColorStop(
-          1,
-          isCrit
-            ? 'rgba(253, 224, 71, 0.95)'
-            : isHeavy && tier >= 4
-              ? 'rgba(249, 115, 22, 0.9)'
-              : 'rgba(251, 191, 36, 0.78)'
-        );
-        ctx.fillStyle = grad;
-        ctx.fillRect(-trailLen, -2.2, trailLen + 2, 4.4);
+        const trailLen = isHeavy ? 22 + (tier - 1) * 3.5 : isCrit ? 28 : 21;
 
+        // Outer wake sheath
+        ctx.fillStyle = isCrit
+          ? 'rgba(253, 224, 71, 0.32)'
+          : isHeavy
+            ? 'rgba(249, 115, 22, 0.3)'
+            : 'rgba(251, 191, 36, 0.28)';
+        ctx.beginPath();
+        ctx.moveTo(-trailLen, 0);
+        ctx.lineTo(-4, -2.8);
+        ctx.lineTo(-4, 2.8);
+        ctx.closePath();
+        ctx.fill();
+
+        // Inner bright tracer core
+        ctx.fillStyle = isCrit
+          ? 'rgba(254, 249, 195, 0.85)'
+          : 'rgba(253, 224, 71, 0.72)';
+        ctx.beginPath();
+        ctx.moveTo(-trailLen * 0.65, 0);
+        ctx.lineTo(-4, -1.3);
+        ctx.lineTo(-4, 1.3);
+        ctx.closePath();
+        ctx.fill();
+
+        // Tapered brass/steel shell casing
         ctx.fillStyle = isHeavy
           ? tier >= 5
             ? '#EF4444'
@@ -1178,24 +1792,28 @@ export class Renderer {
           : isCrit
             ? '#FDE047'
             : '#F59E0B';
-        ctx.strokeStyle = isCrit ? '#B45309' : '#78350F';
+        ctx.strokeStyle = isCrit ? '#92400E' : '#451A03';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(8, 0);
-        ctx.lineTo(2, -3);
-        ctx.lineTo(-6, -2.5);
-        ctx.lineTo(-6, 2.5);
-        ctx.lineTo(2, 3);
+        ctx.moveTo(9, 0);
+        ctx.lineTo(2.5, -3.1);
+        ctx.lineTo(-6.5, -2.4);
+        ctx.lineTo(-6.5, 2.4);
+        ctx.lineTo(2.5, 3.1);
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
 
+        // Metallic driving band & hot nose cap
+        ctx.fillStyle = '#334155';
+        ctx.fillRect(-3.5, -2.5, 2, 5);
+
         ctx.fillStyle =
           isCrit || (isHeavy && tier >= 4) ? '#FFFBEB' : '#FEF3C7';
         ctx.beginPath();
-        ctx.moveTo(8, 0);
-        ctx.lineTo(3, -1.6);
-        ctx.lineTo(3, 1.6);
+        ctx.moveTo(9, 0);
+        ctx.lineTo(3.5, -1.8);
+        ctx.lineTo(3.5, 1.8);
         ctx.closePath();
         ctx.fill();
       }
@@ -1212,184 +1830,342 @@ export class Renderer {
       p.flightDuration && p.flightElapsed !== undefined
         ? Math.min(1, p.flightElapsed / p.flightDuration)
         : 0.5;
-    const arcHeight = Math.sin(t * Math.PI) * 58;
+    const arcHeight = Math.sin(t * Math.PI) * 62;
     const tier = Math.max(1, Math.min(5, p.visualTier ?? 1));
 
     // Ground shadow beneath arcing shell
     ctx.save();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fillStyle = `rgba(0, 0, 0, ${0.38 - Math.sin(t * Math.PI) * 0.14})`;
     ctx.beginPath();
-    ctx.ellipse(p.x, p.y, 6, 4, 0, 0, Math.PI * 2);
+    ctx.ellipse(p.x, p.y, 6.5, 4, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Elevated finned artillery bomb
+    // Elevated finned artillery bomb pitched gently along arc
     ctx.translate(p.x, p.y - arcHeight);
-    ctx.rotate(p.angle);
-    const scale = (0.9 + Math.sin(t * Math.PI) * 0.45) * (1 + (tier - 1) * 0.08);
+    ctx.rotate(p.angle + (t - 0.5) * 0.45);
+    const scale = (0.9 + Math.sin(t * Math.PI) * 0.48) * (1 + (tier - 1) * 0.08);
     ctx.scale(scale, scale);
+
+    // Tracer glow behind mortar bomb
+    ctx.fillStyle = 'rgba(249, 115, 22, 0.52)';
+    ctx.beginPath();
+    ctx.moveTo(-7, -2.5);
+    ctx.lineTo(-16, 0);
+    ctx.lineTo(-7, 2.5);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.fillStyle = tier >= 4 ? '#1E293B' : '#334155';
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.moveTo(8, 0);
-    ctx.lineTo(1, -4.5);
+    ctx.moveTo(9, 0);
+    ctx.lineTo(1.5, -4.5);
     ctx.lineTo(-7, -3.5);
     ctx.lineTo(-7, 3.5);
-    ctx.lineTo(1, 4.5);
+    ctx.lineTo(1.5, 4.5);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
+    // Orange band & brass fuse nose
     ctx.fillStyle = tier >= 4 ? '#EF4444' : '#F97316';
-    ctx.fillRect(-7, -2.5, 3, 5);
+    ctx.fillRect(-7, -2.6, 3.2, 5.2);
+    ctx.fillStyle = '#FDBA74';
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(5.5, -1.8);
+    ctx.lineTo(5.5, 1.8);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
-  private drawEffects(
+  private drawWorldEffects(
     ctx: CanvasRenderingContext2D,
     effects: readonly VisualEffect[]
   ): void {
     for (let i = 0; i < effects.length; i++) {
       const fx = effects[i];
-      const progress = 1 - Math.max(0, fx.life / fx.maxLife);
-      const alpha = Math.max(0, fx.life / fx.maxLife);
+      if (fx.kind === 'damage_text') continue;
+
+      const ratio = Math.max(0, fx.life / fx.maxLife);
+      const progress = 1 - ratio;
 
       ctx.save();
-      ctx.globalAlpha = alpha;
+      ctx.globalAlpha = ratio;
 
       if (fx.kind === 'muzzle') {
         ctx.translate(fx.x, fx.y);
         ctx.rotate(fx.angle);
-        ctx.fillStyle = '#FEF08A';
+        const stretch = 1 + progress * 0.35;
+        // Outer orange/amber star burst
+        ctx.fillStyle = fx.secondaryColor ?? '#FB923C';
         ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(fx.size * (1 + progress * 0.4), -5);
-        ctx.lineTo(fx.size * 0.8, 0);
-        ctx.lineTo(fx.size * (1 + progress * 0.4), 5);
+        ctx.moveTo(-2, -3.5);
+        ctx.lineTo(fx.size * stretch, -5.5);
+        ctx.lineTo(fx.size * 0.72, -1.8);
+        ctx.lineTo(fx.size * 1.22 * stretch, 0);
+        ctx.lineTo(fx.size * 0.72, 1.8);
+        ctx.lineTo(fx.size * stretch, 5.5);
+        ctx.lineTo(-2, 3.5);
         ctx.closePath();
         ctx.fill();
+
+        // Bright white-gold core
+        ctx.fillStyle = fx.color;
+        ctx.beginPath();
+        ctx.moveTo(0, -1.8);
+        ctx.lineTo(fx.size * 0.82 * stretch, 0);
+        ctx.lineTo(0, 1.8);
+        ctx.closePath();
+        ctx.fill();
+      } else if (fx.kind === 'smoke') {
+        ctx.translate(fx.x, fx.y);
+        const r = fx.size * (0.7 + progress * 0.9);
+        ctx.fillStyle = fx.color;
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (fx.kind === 'debris') {
+        ctx.translate(fx.x, fx.y);
+        ctx.rotate(fx.angle + progress * 4);
+        ctx.fillStyle = fx.color;
+        ctx.fillRect(-fx.size, -fx.size * 0.45, fx.size * 2, fx.size * 0.9);
+      } else if (fx.kind === 'hit_ring') {
+        ctx.translate(fx.x, fx.y);
+        const r = fx.size * (0.55 + progress * 0.65);
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = Math.max(1, 2.4 * ratio);
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.stroke();
       } else if (fx.kind === 'impact') {
         ctx.translate(fx.x, fx.y);
         ctx.strokeStyle = fx.color;
         ctx.lineWidth = 2;
-        const r = fx.size * (0.4 + progress * 0.9);
+        const r = fx.size * (0.35 + progress * 0.9);
         ctx.beginPath();
         for (let k = 0; k < 4; k++) {
           const a = (k * Math.PI) / 4 + fx.angle;
-          ctx.moveTo(Math.cos(a) * -r, Math.sin(a) * -r);
+          ctx.moveTo(Math.cos(a) * -r * 0.35, Math.sin(a) * -r * 0.35);
           ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
         }
         ctx.stroke();
+
+        if (progress < 0.45) {
+          ctx.fillStyle = '#FFFBEB';
+          ctx.beginPath();
+          ctx.arc(0, 0, fx.size * 0.28 * (1 - progress), 0, Math.PI * 2);
+          ctx.fill();
+        }
       } else if (fx.kind === 'tracer') {
         ctx.strokeStyle = fx.color;
-        ctx.lineWidth = 2.2;
+        ctx.lineWidth = fx.size;
+        ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(fx.x, fx.y);
         ctx.lineTo(fx.tx, fx.ty);
         ctx.stroke();
       } else if (fx.kind === 'rail_beam') {
-        ctx.strokeStyle = '#06B6D4';
-        ctx.lineWidth = fx.size * 1.8 * alpha;
+        // Outer cyan ionized glow
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = Math.max(1.5, fx.size * 2.2 * ratio);
+        ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(fx.x, fx.y);
         ctx.lineTo(fx.tx, fx.ty);
         ctx.stroke();
 
-        ctx.strokeStyle = '#ECFEFF';
-        ctx.lineWidth = Math.max(1, fx.size * 0.65 * alpha);
+        // Crisp white-hot beam core
+        ctx.strokeStyle = fx.secondaryColor ?? '#ECFEFF';
+        ctx.lineWidth = Math.max(1, fx.size * 0.7 * ratio);
         ctx.beginPath();
         ctx.moveTo(fx.x, fx.y);
         ctx.lineTo(fx.tx, fx.ty);
         ctx.stroke();
-      } else if (fx.kind === 'lightning_arc' && fx.points && fx.points.length >= 2) {
-        ctx.strokeStyle = '#38BDF8';
-        ctx.lineWidth = 3.2;
-        ctx.lineJoin = 'round';
+
+        // Subtle perpendicular capacitor ticks near muzzle
+        const nx = -Math.sin(fx.angle);
+        const ny = Math.cos(fx.angle);
+        const dx = Math.cos(fx.angle);
+        const dy = Math.sin(fx.angle);
+        ctx.strokeStyle = 'rgba(165, 243, 252, 0.75)';
+        ctx.lineWidth = 1.4;
         ctx.beginPath();
-        ctx.moveTo(fx.points[0].x, fx.points[0].y);
-        for (let p = 1; p < fx.points.length; p++) {
-          const prev = fx.points[p - 1];
-          const curr = fx.points[p];
-          const mx = (prev.x + curr.x) * 0.5 + (Math.random() - 0.5) * 18;
-          const my = (prev.y + curr.y) * 0.5 + (Math.random() - 0.5) * 18;
-          ctx.lineTo(mx, my);
-          ctx.lineTo(curr.x, curr.y);
+        for (let t = 1; t <= 3; t++) {
+          const dist = t * 42;
+          const tickHalf = (8 - t * 1.5) * ratio;
+          const px = fx.x + dx * dist;
+          const py = fx.y + dy * dist;
+          ctx.moveTo(px - nx * tickHalf, py - ny * tickHalf);
+          ctx.lineTo(px + nx * tickHalf, py + ny * tickHalf);
         }
         ctx.stroke();
+      } else if (fx.kind === 'lightning_arc' && fx.points && fx.points.length >= 2) {
+        const seed = fx.seed ?? 1;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
 
-        ctx.strokeStyle = '#E0F2FE';
-        ctx.lineWidth = 1.4;
-        ctx.stroke();
+        const drawBolt = (strokeStyle: string, lineWidth: number) => {
+          ctx.strokeStyle = strokeStyle;
+          ctx.lineWidth = lineWidth;
+          ctx.beginPath();
+          ctx.moveTo(fx.points![0].x, fx.points![0].y);
+          for (let p = 1; p < fx.points!.length; p++) {
+            const prev = fx.points![p - 1];
+            const curr = fx.points![p];
+            const dx = curr.x - prev.x;
+            const dy = curr.y - prev.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const nx = -dy / len;
+            const ny = dx / len;
+            const j1 = (hash01(seed, p * 3 + 1) - 0.5) * 20;
+            const j2 = (hash01(seed, p * 3 + 2) - 0.5) * 18;
+            ctx.lineTo(prev.x + dx * 0.34 + nx * j1, prev.y + dy * 0.34 + ny * j1);
+            ctx.lineTo(prev.x + dx * 0.68 + nx * j2, prev.y + dy * 0.68 + ny * j2);
+            ctx.lineTo(curr.x, curr.y);
+          }
+          ctx.stroke();
+        };
+
+        drawBolt(fx.color, 3.6);
+        drawBolt(fx.secondaryColor ?? '#E0F2FE', 1.4);
       } else if (fx.kind === 'flame_cone') {
         const half = fx.coneHalfAngle ?? 0.45;
+        const seed = fx.seed ?? 1;
+        const flicker = 0.92 + hash01(seed, Math.floor(progress * 6)) * 0.14;
         ctx.translate(fx.x, fx.y);
         ctx.rotate(fx.angle);
 
-        const len = fx.size * (0.85 + progress * 0.25);
-        // Outer orange flame cone
-        ctx.fillStyle = 'rgba(249, 115, 22, 0.55)';
+        const len = fx.size * (0.86 + progress * 0.22) * flicker;
+        // Layer 1: Outer crimson-orange wash
+        ctx.fillStyle = 'rgba(234, 88, 12, 0.42)';
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.arc(0, 0, len, -half, half);
         ctx.closePath();
         ctx.fill();
 
-        // Inner bright amber-white flame core
-        ctx.fillStyle = 'rgba(253, 224, 71, 0.72)';
+        // Layer 2: Mid-cone flickering tongues
+        ctx.fillStyle = 'rgba(249, 115, 22, 0.58)';
         ctx.beginPath();
         ctx.moveTo(0, 0);
-        ctx.arc(0, 0, len * 0.62, -half * 0.55, half * 0.55);
+        ctx.arc(0, 0, len * 0.82, -half * 0.78, half * 0.78);
+        ctx.closePath();
+        ctx.fill();
+
+        // Layer 3: Inner bright amber-white core
+        ctx.fillStyle = 'rgba(253, 224, 71, 0.78)';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, len * 0.54, -half * 0.46, half * 0.46);
         ctx.closePath();
         ctx.fill();
       } else if (fx.kind === 'blast_ring') {
         ctx.translate(fx.x, fx.y);
-        const radius = fx.size * (0.45 + progress * 0.65);
+        const radius = fx.size * (0.4 + progress * 0.66);
 
-        ctx.fillStyle = 'rgba(249, 115, 22, 0.25)';
+        ctx.fillStyle =
+          fx.style === 'mine'
+            ? 'rgba(163, 230, 53, 0.16)'
+            : fx.style === 'boss'
+              ? 'rgba(244, 63, 94, 0.2)'
+              : 'rgba(249, 115, 22, 0.18)';
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.strokeStyle = fx.color;
-        ctx.lineWidth = 2.5;
+        ctx.lineWidth = Math.max(1.2, 2.8 * ratio);
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.stroke();
       } else if (fx.kind === 'explosion') {
         ctx.translate(fx.x, fx.y);
-        const radius = fx.size * (0.35 + progress * 1.1);
+        const radius = fx.size * (0.35 + progress * 1.05);
 
-        ctx.fillStyle = 'rgba(249, 115, 22, 0.35)';
+        // Initial bright core flash (first 35% of life)
+        if (progress < 0.35) {
+          const flashAlpha = (1 - progress / 0.35) * 0.88;
+          ctx.fillStyle = `rgba(255, 251, 235, ${flashAlpha})`;
+          ctx.beginPath();
+          ctx.arc(0, 0, radius * 0.55, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Translucent fireball core (stays subtle so enemies/HP stay legible)
+        ctx.fillStyle =
+          fx.style === 'boss'
+            ? 'rgba(244, 63, 94, 0.38)'
+            : fx.style === 'mine'
+              ? 'rgba(250, 204, 21, 0.38)'
+              : 'rgba(249, 115, 22, 0.36)';
         ctx.beginPath();
-        ctx.arc(0, 0, radius * 0.75, 0, Math.PI * 2);
+        ctx.arc(0, 0, radius * 0.72, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.strokeStyle = '#FBBF24';
-        ctx.lineWidth = 2.5;
+        // Crisp shockwave ring
+        ctx.strokeStyle = fx.style === 'boss' ? '#FDA4AF' : '#FBBF24';
+        ctx.lineWidth = Math.max(1.2, (fx.style === 'boss' ? 3.2 : 2.3) * ratio);
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.stroke();
 
-        ctx.strokeStyle = '#FDBA74';
-        ctx.lineWidth = 1.8;
+        // Radial shrapnel rays
+        ctx.strokeStyle = fx.color;
+        ctx.lineWidth = 1.6;
+        const rayCount = fx.style === 'boss' ? 8 : 6;
         ctx.beginPath();
-        for (let s = 0; s < 6; s++) {
-          const a = fx.angle + (s * Math.PI) / 3;
+        for (let s = 0; s < rayCount; s++) {
+          const a = fx.angle + (s * Math.PI * 2) / rayCount;
           const r1 = radius * 0.45;
-          const r2 = radius * 1.15;
+          const r2 = radius * (1.05 + (s % 2) * 0.16);
           ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
           ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2);
         }
         ctx.stroke();
-      } else if (fx.kind === 'damage_text' && fx.value !== undefined) {
-        ctx.font = fx.isCrit
-          ? '700 14px "JetBrains Mono", monospace'
-          : '700 12px "JetBrains Mono", monospace';
-        ctx.textAlign = 'center';
-        const label = fx.isCrit ? `-${fx.value}!` : `-${fx.value}`;
-        ctx.lineWidth = fx.isCrit ? 3.5 : 3;
-        ctx.strokeStyle = 'rgba(12, 15, 20, 0.9)';
+      }
+
+      ctx.restore();
+    }
+  }
+
+  private drawDamageNumbers(
+    ctx: CanvasRenderingContext2D,
+    effects: readonly VisualEffect[]
+  ): void {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let i = 0; i < effects.length; i++) {
+      const fx = effects[i];
+      if (fx.kind !== 'damage_text' || fx.value === undefined) continue;
+
+      const ratio = Math.max(0, fx.life / fx.maxLife);
+      const progress = 1 - ratio;
+      const alpha = ratio > 0.25 ? 1 : ratio / 0.25;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      if (fx.isCrit) {
+        const pop = progress < 0.18 ? 1 + (0.18 - progress) * 1.4 : 1;
+        ctx.translate(fx.x, fx.y);
+        ctx.scale(pop, pop);
+        ctx.font = '800 14px "JetBrains Mono", monospace';
+        const label = `-${fx.value}!`;
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = 'rgba(10, 12, 16, 0.92)';
+        ctx.strokeText(label, 0, 0);
+        ctx.fillStyle = fx.color;
+        ctx.fillText(label, 0, 0);
+      } else {
+        ctx.font = '700 11.5px "JetBrains Mono", monospace';
+        const label = `-${fx.value}`;
+        ctx.lineWidth = 2.8;
+        ctx.strokeStyle = 'rgba(10, 12, 16, 0.88)';
         ctx.strokeText(label, fx.x, fx.y);
         ctx.fillStyle = fx.color;
         ctx.fillText(label, fx.x, fx.y);
@@ -1397,5 +2173,7 @@ export class Renderer {
 
       ctx.restore();
     }
+
+    ctx.restore();
   }
 }

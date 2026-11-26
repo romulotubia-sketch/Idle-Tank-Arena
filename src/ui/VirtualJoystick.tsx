@@ -4,7 +4,7 @@ interface VirtualJoystickProps {
   onMove: (x: number, y: number) => void;
 }
 
-const MAX_RADIUS = 30;
+const MAX_RADIUS = 26;
 
 export function VirtualJoystick({ onMove }: VirtualJoystickProps) {
   const baseRef = useRef<HTMLDivElement | null>(null);
@@ -105,21 +105,21 @@ export function VirtualJoystick({ onMove }: VirtualJoystickProps) {
           resetKnob();
         }
       }}
-      className={`touch-none select-none relative w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 flex items-center justify-center transition-colors cursor-grab active:cursor-grabbing ${
+      className={`touch-none select-none relative w-[84px] h-[84px] sm:w-24 sm:h-24 rounded-full border-2 flex items-center justify-center transition-colors cursor-grab active:cursor-grabbing ${
         isDragging
-          ? 'bg-[#121820]/88 border-amber-400/80'
-          : 'bg-[#121820]/68 border-slate-500/50 hover:border-slate-400/75'
+          ? 'bg-[#121820]/88 border-amber-400/85'
+          : 'bg-[#121820]/65 border-slate-500/50 hover:border-slate-400/75'
       }`}
     >
-      {/* Inner directional crosshair */}
+      {/* Inner directional ring */}
       <div
-        className="pointer-events-none absolute inset-3 rounded-full border border-white/10"
+        className="pointer-events-none absolute inset-2.5 rounded-full border border-white/10"
         aria-hidden="true"
       />
 
       {/* Thumb Knob */}
       <div
-        className={`pointer-events-none w-10 h-10 sm:w-11 sm:h-11 rounded-full border-2 shadow-lg transition-colors ${
+        className={`pointer-events-none w-9 h-9 sm:w-10 sm:h-10 rounded-full border-2 shadow-lg transition-colors ${
           isDragging
             ? 'bg-amber-400 border-amber-200'
             : 'bg-[#2C3746] border-slate-400/80'

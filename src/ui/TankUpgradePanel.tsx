@@ -5,11 +5,11 @@ import {
   Heart,
   Shield,
   Target,
-  X,
   Zap,
 } from 'lucide-react';
 import { UpgradeSystem } from '../game/systems/UpgradeSystem';
 import { UpgradeEntry, UpgradeId } from '../game/types';
+import { BattlefieldPanel } from './components/BattlefieldPanel';
 
 export interface UpgradeFeedbackInfo {
   text: string;
@@ -85,57 +85,24 @@ export function TankUpgradePanel({
   onClose,
 }: TankUpgradePanelProps) {
   return (
-    <aside
-      aria-label="Tank Upgrades"
-      className="absolute top-2 right-2 bottom-2 z-20 w-[305px] sm:w-[345px] max-w-[calc(100%-16px)] flex flex-col bg-[#141A21]/95 border border-[#334155] rounded-xl shadow-2xl overflow-hidden"
+    <BattlefieldPanel
+      title="Tank Upgrades"
+      icon={<Shield className="w-4 h-4 text-amber-400" />}
+      variant="drawer"
+      ariaLabel="Tank Upgrades"
+      closeLabel="Close Tank Upgrades"
+      onClose={onClose}
+      feedback={feedback}
+      headerActions={
+        <div className="flex items-center gap-1 bg-[#10151B] border border-amber-500/35 rounded-md px-2 py-1">
+          <Coins className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <span className="font-mono-tabular text-xs font-bold text-amber-300">
+            {goldBalance}
+          </span>
+        </div>
+      }
     >
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 bg-[#1A222C]">
-        <div className="flex items-center gap-2 min-w-0">
-          <Shield className="w-4 h-4 text-amber-400 shrink-0" />
-          <h2 className="text-xs sm:text-sm font-bold text-white tracking-tight truncate">
-            Tank Upgrades
-          </h2>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="flex items-center gap-1 bg-[#12161B] border border-amber-500/35 rounded-md px-2 py-0.5">
-            <Coins className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="font-mono-tabular text-xs font-bold text-amber-300">
-              {goldBalance}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.currentTarget.blur();
-              onClose();
-            }}
-            aria-label="Close Tank Upgrades"
-            className="w-7 h-7 flex items-center justify-center rounded-md bg-[#202934] hover:bg-[#2B3746] border border-white/10 text-slate-300 hover:text-white transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Transient upgrade or insufficient coin feedback */}
-      {feedback && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`px-3 py-1.5 text-[11px] font-semibold border-b ${
-            feedback.tone === 'error'
-              ? 'bg-rose-950/70 border-rose-500/40 text-rose-200'
-              : 'bg-emerald-950/70 border-emerald-500/40 text-emerald-200'
-          }`}
-        >
-          {feedback.text}
-        </div>
-      )}
-
-      {/* Six Permanent Tank Upgrades */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-1.5">
+      <div className="flex-1 min-h-0 overflow-y-auto panel-scroll p-2 flex flex-col gap-1.5">
         {upgrades.map((entry) => {
           const affordable = !entry.isMaxed && goldBalance >= entry.nextCost;
           const isHighlighted = highlightedUpgradeId === entry.id;
@@ -167,7 +134,7 @@ export function TankUpgradePanel({
                       {entry.label}
                     </span>
                     <span
-                      className={`font-mono-tabular text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+                      className={`font-mono-tabular text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 leading-none ${
                         entry.isMaxed
                           ? 'bg-amber-500/20 border-amber-400/50 text-amber-300'
                           : 'bg-[#11161C] border-white/10 text-slate-300'
@@ -188,7 +155,7 @@ export function TankUpgradePanel({
                     )}
                     {armorReductionPct !== null && (
                       <span className="text-[10px] text-slate-400 font-sans">
-                        · {armorReductionPct}% dmg block
+                        · {armorReductionPct}% block
                       </span>
                     )}
                   </div>
@@ -207,11 +174,11 @@ export function TankUpgradePanel({
                     ? `${entry.label} maxed`
                     : `Upgrade ${entry.label} for ${entry.nextCost} Coins`
                 }
-                className={`shrink-0 min-w-[78px] h-9 px-2.5 rounded-lg border font-bold text-xs flex items-center justify-center gap-1 transition-all active:scale-95 ${
+                className={`shrink-0 min-w-[76px] h-9 px-2.5 rounded-lg border font-bold text-xs flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer ${
                   entry.isMaxed
                     ? 'bg-[#151B22] border-white/10 text-slate-500 cursor-default'
                     : affordable
-                      ? 'bg-[#D97706] hover:bg-[#F59E0B] border-amber-300/60 text-slate-950 shadow-sm'
+                      ? 'bg-amber-500 hover:bg-amber-400 border-amber-300/60 text-slate-950 shadow-sm'
                       : 'bg-[#202732] hover:bg-[#27303D] border-white/10 text-slate-400'
                 }`}
               >
@@ -232,6 +199,6 @@ export function TankUpgradePanel({
           );
         })}
       </div>
-    </aside>
+    </BattlefieldPanel>
   );
 }

@@ -1,3 +1,4 @@
+import { GAME_BALANCE } from '../../balanceConfig';
 import { SkillDefinition } from '../../types';
 import {
   applySkillDamageBonus,
@@ -7,23 +8,7 @@ import {
   SkillExecutionContext,
 } from './BaseSkill';
 
-interface CannonLevelSpec {
-  damage: number;
-  interval: number;
-  range: number;
-  speed: number;
-  salvoCount: number;
-  pierceCount: number;
-  shellRadius: number;
-}
-
-const CANNON_LEVELS: readonly CannonLevelSpec[] = [
-  { damage: 38, interval: 2.2, range: 350, speed: 600, salvoCount: 1, pierceCount: 1, shellRadius: 7 },   // Lv1
-  { damage: 52, interval: 1.98, range: 365, speed: 645, salvoCount: 1, pierceCount: 1, shellRadius: 7.5 }, // Lv2
-  { damage: 68, interval: 1.8, range: 382, speed: 690, salvoCount: 1, pierceCount: 2, shellRadius: 8 },   // Lv3: AP pierce
-  { damage: 88, interval: 1.6, range: 400, speed: 735, salvoCount: 2, pierceCount: 2, shellRadius: 8.5 }, // Lv4: Twin salvo
-  { damage: 116, interval: 1.4, range: 420, speed: 780, salvoCount: 2, pierceCount: 3, shellRadius: 9.5 }, // Lv5: Twin heavy AP
-];
+const CANNON_LEVELS = GAME_BALANCE.skills.cannon;
 
 export class CannonSkill implements CombatSkillModule {
   readonly definition: SkillDefinition = {
